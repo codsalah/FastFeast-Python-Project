@@ -1,0 +1,19 @@
+psycopg2-binary==2.9.9          # PostgreSQL driver + built-in connection pool
+
+pydantic==2.6.4                 # Type-safe settings + data contracts
+pydantic-settings==2.2.1        # BaseSettings with env / YAML support
+python-dotenv==1.0.1            # Load .env into environment
+
+pandas==2.2.1                   # DataFrame transforms; chunked file reads
+numpy==1.26.4                   # Required by pandas
+
+structlog==24.1.0               # Structured JSON logging
+
+tenacity==8.2.3                 # Exponential backoff decorators
+
+pytest==8.1.1                   # Test runner
+pytest-cov==5.0.0               # Coverage reports
+freezegun==1.4.0                # Freeze time in SLA / timestamp tests
+great_expectations==0.21.1      # Data quality testing
+
+PyYAML==6.0.1                   # config.yaml parsing
