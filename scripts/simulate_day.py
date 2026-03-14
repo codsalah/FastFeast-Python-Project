@@ -83,23 +83,29 @@ def main():
         "orphan_opportunities": []
     }
     
+    # Resolve script paths so this works from any CWD
+    scripts_dir = os.path.dirname(os.path.abspath(__file__))
+    gen_master = [sys.executable, os.path.join(scripts_dir, "generate_master_data.py")]
+    gen_batch = [sys.executable, os.path.join(scripts_dir, "generate_batch_data.py")]
+    add_customers = [sys.executable, os.path.join(scripts_dir, "add_new_customers.py")]
+    add_drivers = [sys.executable, os.path.join(scripts_dir, "add_new_drivers.py")]
+    gen_stream = [sys.executable, os.path.join(scripts_dir, "generate_stream_data.py")]
+
     # Step 0: Generate master data if needed
     if not check_master_data():
         print("\n[INFO] Master data not found. Generating...")
-        if not run_command(["python", "generate_master_data.py"], 
-                          "Generate master data", verbose):
+        if not run_command(gen_master, "Generate master data", verbose):
             return 1
     elif not args.skip_master:
         print("\n[INFO] Master data exists. Regenerating for fresh start...")
-        if not run_command(["python", "generate_master_data.py"], 
-                          "Regenerate master data", verbose):
+        if not run_command(gen_master, "Regenerate master data", verbose):
             return 1
     else:
         print("\n[INFO] Using existing master data (--skip-master)")
     
     # Step 1: Generate batch data (morning snapshot)
-    if not run_command(["python", "generate_batch_data.py", "--date", run_date],
-                      f"Generate batch data for {run_date}", verbose):
+    if not run_command(gen_batch + ["--date", run_date],
+                       f"Generate batch data for {run_date}", verbose):
         return 1
     
     # Step 2-N: Interleave new signups with stream generation
@@ -109,23 +115,23 @@ def main():
         # Before some hours, add new customers/drivers (creating orphan potential)
         if random.random() < 0.6:  # 60% chance before each hour
             new_customers = random.randint(2, 8)
-            if not run_command(["python", "add_new_customers.py", "--count", str(new_customers)],
-                              f"Add {new_customers} new customers (before hour {hour})", verbose):
+            if not run_command(add_customers + ["--count", str(new_customers)],
+                               f"Add {new_customers} new customers (before hour {hour})", verbose):
                 return 1
             stats["customers_added"] += new_customers
             stats["orphan_opportunities"].append(f"Customers before hour {hour}")
         
         if random.random() < 0.4:  # 40% chance for drivers
             new_drivers = random.randint(1, 4)
-            if not run_command(["python", "add_new_drivers.py", "--count", str(new_drivers)],
-                              f"Add {new_drivers} new drivers (before hour {hour})", verbose):
+            if not run_command(add_drivers + ["--count", str(new_drivers)],
+                               f"Add {new_drivers} new drivers (before hour {hour})", verbose):
                 return 1
             stats["drivers_added"] += new_drivers
             stats["orphan_opportunities"].append(f"Drivers before hour {hour}")
         
         # Generate stream data for this hour
-        if not run_command(["python", "generate_stream_data.py", "--date", run_date, "--hour", str(hour)],
-                          f"Generate stream data for hour {hour:02d}", verbose):
+        if not run_command(gen_stream + ["--date", run_date, "--hour", str(hour)],
+                           f"Generate stream data for hour {hour:02d}", verbose):
             return 1
         stats["hours_generated"] += 1
     
