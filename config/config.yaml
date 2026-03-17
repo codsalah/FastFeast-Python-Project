@@ -1,0 +1,161 @@
+# =============================================
+# FastFeast Pipeline — Configuration
+# =============================================
+ 
+# ── DATABASE ──────────────────────────────
+database:
+  host: ${DB_HOST}
+  # ${DB_HOST} is a placeholder
+  # config_loader.py replaces it with the real value from .env
+  # locally: localhost
+  # inside Docker: 'postgres' (the service name)
+ 
+  port: ${DB_PORT}
+  # ${DB_PORT} → replaced with 5432 from .env
+ 
+  name: ${DB_NAME}
+  # ${DB_NAME} → replaced with fastfeast_dwh from .env
+ 
+  user: ${DB_USER}
+  # ${DB_USER} → replaced with pipeline_user from .env
+ 
+  password: ${DB_PASSWORD}
+  # ${DB_PASSWORD} → replaced with real password from .env
+  # The password itself is never written here
+ 
+  pool_size: 5
+  # How many database connections to keep open
+  # Not secret — safe to have here 
+  # Instead of opening a new DB connection every time your app queries the database (which is slow), 
+  # the app keeps a pool of ready connections.
+ 
+# ── FILE PATHS ────────────────────────────
+paths:
+  batch_dir: data/input/batch
+  # Where the pipeline looks for daily batch files
+ 
+  stream_dir: data/input/stream
+  # Where the pipeline watches for hourly stream files
+ 
+  master_dir: data/master
+  # Where master data scripts write their output
+ 
+  log_dir: data/logs
+  # Where the pipeline writes log files
+ 
+# ── ORPHAN HANDLING ───────────────────────
+orphan_handling:
+  max_orphan_rate_threshold: 0.10
+  # Alert if orphan rate exceeds 10%
+  # Based on instructor requirement: accuracy >= 90%
+ 
+  retry_max_days: 3
+  # Keep retrying orphan for 3 days
+  # Day 4 without resolution = quarantine
+ 
+  unknown_customer_key: -1
+  # Surrogate key of Unknown dimension member
+  # All orphan orders point here temporarily
+ 
+  unknown_driver_key: -1
+  # Same for drivers
+ 
+# ── PIPELINE BEHAVIOUR ────────────────────
+pipeline:
+  stream_poll_interval_sec: 30
+  # Check stream directory every 30 seconds
+ 
+  max_file_age_days: 7
+  # Ignore files older than 7 days
+  # Prevents reprocessing very old files after outage
+ 
+# ── QUALITY THRESHOLDS ────────────────────
+quality:
+  null_rate_threshold: 0.05
+  # Alert if more than 5% of records have null required fields
+ 
+  duplicate_rate_threshold: 0.03
+  # Alert if more than 3% of records are duplicates
+ 
+  orphan_rate_threshold: 0.10
+  # Must match orphan_handling.max_orphan_rate_threshold
+ 
+# ── ALERTING ──────────────────────────────
+alerting:
+  enabled: true
+  # Master switch — set false to disable all alerts
+ 
+  smtp_host: ${SMTP_HOST}
+  smtp_port: ${SMTP_PORT}
+  sender: ${ALERT_SENDER}
+  password: ${SMTP_PASSWORD}
+  # All email settings come from .env
+ 
+  recipients:
+    - dataeng@fastfeast.com
+  # List of emails to notify when something breaks
+ 
+# ── LOGGING ───────────────────────────────
+logging:
+  format: json
+  # json = structured, machine-readable
+  # text = human-readable
+ 
+  level: INFO
+  # INFO logs normal operations and errors
+  # DEBUG logs everything (very verbose)
+ 
+  max_file_size_mb: 50
+  # Rotate log file at 50MB — never kills disk
+ 
+  max_files: 10
+  # Keep 10 rotated files maximum = 500MB total
+ 
+# ── PII PROTECTION ────────────────────────
+pii:
+  mask_customer_name: true
+  # Ahmed Hassan → A. *** in the warehouse
+ 
+  exclude_fields:
+    - email
+    - phone
+    - national_id
+    - driver_phone
+    - agent_email
+    - agent_phone
+  # These fields are completely removed
+  # Never stored in any dimension table
+ 
+# ── SCD TRACKED FIELDS ────────────────────
+scd:
+  dim_customer:
+    tracked_fields: [segment_name, region_name]
+  # When these change → close old row, insert new version
+ 
+  dim_driver:
+    tracked_fields: [is_active, region_name]
+ 
+  dim_restaurant:
+    tracked_fields: [is_active]
+  # rating_avg not tracked → overwritten daily (SCD Type 1)
+ 
+  dim_agent:
+    tracked_fields: [team_name, skill_level, is_active]
+ 
+  dim_priority:
+    tracked_fields: [sla_first_response_min, sla_resolution_min]
+ 
+# ── IDEMPOTENCY ───────────────────────────
+idempotency:
+  file_hash_algorithm: sha256
+  # Algorithm to fingerprint files before processing
+ 
+# ── RECONCILIATION ────────────────────────
+reconciliation:
+  run_after_batch: true
+  # Always run reconciliation after batch pipeline
+ 
+  retry_max_days: 3
+  # Same as orphan_handling.retry_max_days
+  # Kept here too so reconciliation module is self-contained
+ 
