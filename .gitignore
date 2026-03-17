@@ -1,0 +1,25 @@
+# ── SECRETS ───────────────────────────────
+.env
+.env.local
+.env.staging
+.env.production
+
+# ── DATA DIRECTORIES ──────────────────────
+data/
+ 
+# ── PYTHON CACHE ──────────────────────────
+__pycache__/
+
+# Virtual environment
+env/
+.venv/
+v
+
+# Python creates these automatically when running code
+*.pyc
+*.pyo
+ 
+# ── IDE FILES ─────────────────────────────
+.vscode/
+
+ 
