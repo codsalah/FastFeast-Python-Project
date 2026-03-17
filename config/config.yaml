@@ -10,24 +10,13 @@ database:
   # locally: localhost
   # inside Docker: 'postgres' (the service name)
  
-  port: ${DB_PORT}
-  # ${DB_PORT} → replaced with 5432 from .env
- 
-  name: ${DB_NAME}
-  # ${DB_NAME} → replaced with fastfeast_dwh from .env
- 
-  user: ${DB_USER}
-  # ${DB_USER} → replaced with pipeline_user from .env
- 
+  port: ${DB_PORT} 
+  name: ${DB_NAME} 
+  user: ${DB_USER} 
   password: ${DB_PASSWORD}
-  # ${DB_PASSWORD} → replaced with real password from .env
-  # The password itself is never written here
- 
+  
   pool_size: 5
   # How many database connections to keep open
-  # Not secret — safe to have here 
-  # Instead of opening a new DB connection every time your app queries the database (which is slow), 
-  # the app keeps a pool of ready connections.
  
 # ── FILE PATHS ────────────────────────────
 paths:
@@ -98,13 +87,10 @@ alerting:
 # ── LOGGING ───────────────────────────────
 logging:
   format: json
-  # json = structured, machine-readable
-  # text = human-readable
  
   level: INFO
   # INFO logs normal operations and errors
-  # DEBUG logs everything (very verbose)
- 
+  
   max_file_size_mb: 50
   # Rotate log file at 50MB — never kills disk
  
