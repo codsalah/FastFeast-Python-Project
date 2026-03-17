@@ -1,0 +1,33 @@
+# ── SECRETS ───────────────────────────────
+.env
+.env.local
+.env.staging
+.env.production
+
+# ── DATA DIRECTORIES ──────────────────────
+data/input/
+ 
+data/master/
+ 
+data/logs/
+ 
+# ── PYTHON CACHE ──────────────────────────
+__pycache__/
+
+# Virtual environment
+env/
+env/
+.venv/
+v
+# Python creates these automatically when running code
+ 
+*.pyc
+# Compiled Python files — auto-generated
+ 
+*.pyo
+# Optimised Python files — auto-generated
+ 
+# ── IDE FILES ─────────────────────────────
+.vscode/
+
+ 
