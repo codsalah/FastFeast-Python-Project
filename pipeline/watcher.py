@@ -6,31 +6,35 @@ Directory polling for batch and stream files.
 Two pollers run in separate threads:
     BatchPoller  — watches from 6AM, processes 13 batch files once per day,
                    then sleeps until 6AM tomorrow
-    StreamPoller — scans every 30 seconds continuously throughout the day
+    StreamPoller — scans continuously throughout the day for stream files
+                   that arrive at irregular intervals
 
 FUTURE CHANGES NEEDED:
     1. BatchPoller.processor.process() — currently calls TestProcessor (prints only)
        Later: replace with real FileProcessor that validates + loads to DB
     2. processed_today set — currently in-memory only, lost on restart
-       Later: replace with file_tracking table check
+       Later: replace with audit_trail.is_file_processed(filepath) check
     3. processed set — same as above
-       Later: replace with file_tracking table check
+       Later: replace with audit_trail.is_file_processed(filepath) check
     4. Alerter — currently missing, batch failure only logs a warning
        Later: wire in AlertConfig from settings to send email on batch missing
     5. _get_fallback_batch_dir — not implemented yet (IF NEEDED)
        Later: implement fallback to yesterday's batch when today's never arrives
-
-CHECK:
-   LOGGING
 """
 
 import os
 import time
-import logging
 import threading
 from datetime import date, datetime, timedelta
 
-logger = logging.getLogger(__name__)
+from pipeline.logging.logger import (
+    get_logger_name,
+    log_stage_start,
+    log_stage_complete,
+    log_alert_fired,
+)
+
+logger = get_logger_name(__name__)
 
 # ── Expected files ────────────────────────────────────────────
 
@@ -57,8 +61,8 @@ STREAM_FILES = [
 ]
 
 # Batch window: only watch between these hours
-BATCH_WINDOW_START = 6   # 6AM  — before this, batch never arrives
-BATCH_WINDOW_END   = 14  # 2PM  — after all 13 done, sleep until next 6AM, but if past 2PM and still missing, keep watching + log warning
+BATCH_WINDOW_START = 23   # 11PM  — before this, batch never arrives
+BATCH_WINDOW_END   = 1  # 1AM  — past this with files missing → log CRITICAL alert
 
 
 # ── File stability check ──────────────────────────────────────
@@ -67,7 +71,7 @@ def is_file_stable(filepath: str, wait_sec: int = 1) -> bool:
     """
     Check if a file is done being written.
     Compare size before and after wait_sec seconds.
-    If size is the same the file is safe to read.
+    If size is unchanged the file is safe to read.
 
     wait_sec: 1 for local files, 2-3 for network drives.
     """
@@ -87,30 +91,28 @@ class BatchPoller:
     Watches for today's 13 batch files.
 
     Behaviour:
-    - Before 6AM: sleep until 6AM — batch never arrives this early
-    - 6AM onward: scan every poll_interval seconds until all 13 files found
-    - All 13 done: sleep until 6AM tomorrow — no point scanning again today
-    - If batch still missing after 2PM: keep watching + log warning
-    - Midnight: reset for the new day
+    - Before 11PM: sleep until 11PM — batch never arrives this early
+    - 11PM onward: scan every poll_interval seconds until all 13 files found
+    - All 13 done: sleep until 11PM tomorrow — no point scanning again today
+    - If batch still missing after 1AM: log CRITICAL alert once, keep watching
+    - 11PM: reset for the new day
     """
 
-    def __init__(self, batch_base_dir: str, processor, poll_interval: int = 60):
+    def __init__(self, batch_base_dir: str, processor, alerter, poll_interval: int = 60):
         self.batch_base_dir = batch_base_dir
         self.processor      = processor
         self.poll_interval  = poll_interval
         self.running        = False
         self._thread        = None
 
-        # FUTURE: add alerter parameter
-        # def __init__(self, batch_base_dir, processor, alerter, poll_interval=60):
-        #     self.alerter = alerter
+        self.alerter = alerter
 
     def start(self):
         self.running = True
         self._thread = threading.Thread(
             target=self._run,
             name="BatchPoller",
-            daemon=True 
+            daemon=True
         )
         self._thread.start()
         logger.info("BatchPoller started")
@@ -124,12 +126,11 @@ class BatchPoller:
 
         # CURRENT: in-memory set — lost every time pipeline restarts
         # FUTURE:  remove this set entirely
-        #          replace every check (if filepath in processed_today)
-        #          with: file_tracker.get_status(filepath) == "success"
-        #          where file_tracker is a FileTracker instance from pipeline/file_tracker.py
+        #          replace every (if filepath in processed_today) check
+        #          with: audit_trail.is_file_processed(filepath)
         processed_today = set()
         current_day     = None
-        alert_sent      = False   # prevents sending duplicate alerts same day
+        alert_sent      = False   # prevents duplicate alerts on the same day
 
         while self.running:
             today = date.today().isoformat()
@@ -137,7 +138,7 @@ class BatchPoller:
 
             # ── Midnight reset ─────────────────────────────────
             if today != current_day:
-                logger.info(f"BatchPoller: new day {today}")
+                logger.info("BatchPoller: new day", date=today)
                 processed_today = set()   # FUTURE: no set to clear — file_tracking handles this
                 current_day     = today
                 alert_sent      = False
@@ -150,8 +151,9 @@ class BatchPoller:
                             )
                 sleep_sec = (wake_at - now).total_seconds()
                 logger.info(
-                    f"BatchPoller: before batch window. "
-                    f"Sleeping {sleep_sec/60:.0f} min until 6AM."
+                    "BatchPoller: before batch window, sleeping",
+                    sleep_min=round(sleep_sec / 60),
+                    wake_at=f"{BATCH_WINDOW_START:02d}:00"
                 )
                 time.sleep(sleep_sec)
                 continue
@@ -160,7 +162,7 @@ class BatchPoller:
             batch_dir = os.path.join(self.batch_base_dir, today)
 
             if not os.path.exists(batch_dir):
-                logger.debug(f"BatchPoller: waiting for {batch_dir}")
+                logger.debug("BatchPoller: waiting for batch dir", batch_dir=batch_dir)
                 time.sleep(self.poll_interval)
                 continue
 
@@ -169,10 +171,7 @@ class BatchPoller:
                 filepath = os.path.join(batch_dir, filename)
 
                 # CURRENT: check in-memory set
-                # FUTURE:  status = file_tracker.get_status(filepath)
-                #          if status == "success": continue
-                #          if status == "in_progress": pass  ← reprocess crashed file
-                #          if status is None: pass           ← new file, process it
+                # FUTURE:  if audit_trail.is_file_processed(filepath): continue
                 if filepath in processed_today:
                     continue
 
@@ -180,10 +179,14 @@ class BatchPoller:
                     continue
 
                 if not is_file_stable(filepath):
-                    logger.debug(f"BatchPoller: file still writing: {filepath}")
+                    logger.debug(
+                        "BatchPoller: file still writing",
+                        file=filepath,
+                    )
                     continue
 
-                logger.info(f"BatchPoller: found → {filepath}")
+                # File is ready — log stage start then hand to processor
+                log_stage_start(logger, stage_name="file_detection", file=filepath, poller="batch")
 
                 # CURRENT: calls TestProcessor which only prints
                 # FUTURE:  calls real FileProcessor which:
@@ -196,7 +199,7 @@ class BatchPoller:
                 self.processor.process(filepath, file_type="batch")
 
                 # CURRENT: add to in-memory set
-                # FUTURE:  remove this line — file_tracking table handles dedup
+                # FUTURE:  remove — audit_trail.mark_file_success() handles dedup
                 processed_today.add(filepath)
 
             # ── Check if ALL 13 files are done ─────────────────
@@ -204,7 +207,7 @@ class BatchPoller:
                 os.path.join(batch_dir, f) in processed_today
                 for f in BATCH_FILES
                 # FUTURE: replace with:
-                # file_tracker.get_status(os.path.join(batch_dir, f)) == "success"
+                # audit_trail.is_file_processed(os.path.join(batch_dir, f))
             )
 
             if all_done:
@@ -213,9 +216,16 @@ class BatchPoller:
                     datetime.min.time().replace(hour=BATCH_WINDOW_START)
                 )
                 sleep_sec = (tomorrow_6am - now).total_seconds()
-                logger.info(
-                    f"BatchPoller: all {len(BATCH_FILES)} files processed. "
-                    f"Sleeping {sleep_sec/3600:.1f}h until 6AM tomorrow."
+
+                # All 13 done — log stage complete then sleep until tomorrow
+                log_stage_complete(
+                    logger,
+                    stage_name = "file_detection",
+                    records    = len(BATCH_FILES),
+                    latency_ms = 0.0,
+                    poller     = "batch",
+                    sleep_hours= round(sleep_sec / 3600, 1),
+                    wake_at    = f"{BATCH_WINDOW_START:02d}:00 tomorrow"
                 )
                 time.sleep(sleep_sec)
 
@@ -223,21 +233,34 @@ class BatchPoller:
                 missing = [
                     f for f in BATCH_FILES
                     if os.path.join(batch_dir, f) not in processed_today
-                    # FUTURE: replace condition with file_tracking check
+                    # FUTURE: replace condition with audit_trail check
                 ]
 
                 # ── Past 2PM and still missing — alert once ────
                 if now.hour >= BATCH_WINDOW_END and not alert_sent:
-                    logger.critical(
-                        f"BatchPoller: CRITICAL — past {BATCH_WINDOW_END}:00, "
-                        f"batch still incomplete. Missing: {missing}"
+                    log_alert_fired(
+                        logger,
+                        alert_type    = "BATCH_FILES_MISSING",
+                        severity      = "CRITICAL",
+                        message       = f"Past {BATCH_WINDOW_END:02d}:00 and batch still incomplete",
+                        stage         = "file_detection",
+                        date          = today,
+                        missing       = missing,
+                        missing_count = len(missing),
                     )
 
-                    # FUTURE: send real alert
-                    # self.alerter.send_async(
-                    #     subject="CRITICAL: Batch files missing",
-                    #     body=f"Date: {today}\nMissing: {missing}"
-                    # )
+                    # Send real email alert
+                    if hasattr(self, "alerter") and self.alerter:
+                        if hasattr(self.alerter, "send_alert"):
+                            self.alerter.send_alert(
+                                error_type="BATCH_FILES_MISSING",
+                                message=f"Date: {today}\nMissing: {missing}"
+                            )
+                        elif hasattr(self.alerter, "send_async"):
+                            self.alerter.send_async(
+                                subject="CRITICAL: Batch files missing",
+                                body=f"Date: {today}\nMissing: {missing}"
+                            )
 
                     # FUTURE: load fallback from yesterday's batch
                     # fallback_dir = self._get_fallback_batch_dir(today)
@@ -250,8 +273,10 @@ class BatchPoller:
 
                 else:
                     logger.debug(
-                        f"BatchPoller: {len(processed_today)}/{len(BATCH_FILES)} done. "
-                        f"Still waiting for: {missing}"
+                        "BatchPoller: batch incomplete, still waiting",
+                        processed=len(processed_today),
+                        total=len(BATCH_FILES),
+                        missing=missing,
                     )
 
                 time.sleep(self.poll_interval)
@@ -269,7 +294,7 @@ class BatchPoller:
     #             for f in BATCH_FILES
     #         )
     #         if past_done:
-    #             logger.warning(f"BatchPoller: fallback found at {past_dir}")
+    #             logger.warning("BatchPoller: fallback batch found", fallback_dir=past_dir)
     #             return past_dir
     #     return None
 
@@ -279,9 +304,13 @@ class BatchPoller:
 class StreamPoller:
     """
     Scans all HH/ subfolders under today's stream directory.
-    Runs every 30 seconds continuously.
+    Runs continuously, scanning every poll_interval seconds.
     Calls processor.process() for each new file found.
     Each file is reported exactly once per session.
+
+    Files arrive at irregular intervals throughout the day — not on a fixed schedule.
+    Hour folders are scanned oldest → newest for correct ordering on recovery
+    after an unexpected restart.
 
     Within-session dedup:  handled by processed set (current)
     Cross-restart dedup:   handled by file_tracking table (future)
@@ -314,7 +343,7 @@ class StreamPoller:
         # CURRENT: in-memory set — works within one session only
         # FUTURE:  remove this set entirely
         #          replace (if filepath in processed) check
-        #          with: file_tracker.get_status(filepath) == "success"
+        #          with: audit_trail.is_file_processed(filepath)
         processed = set()
 
         while self.running:
@@ -322,11 +351,12 @@ class StreamPoller:
             stream_dir = os.path.join(self.stream_base_dir, today)
 
             if not os.path.exists(stream_dir):
-                logger.debug(f"StreamPoller: no stream dir yet for {today}")
+                logger.debug("StreamPoller: no stream dir yet", date=today)
                 time.sleep(self.poll_interval)
                 continue
 
             # Scan all HH/ subfolders sorted oldest → newest
+            # Ensures correct processing order on recovery after unexpected restart
             hour_folders = sorted([
                 f for f in os.listdir(stream_dir)
                 if os.path.isdir(os.path.join(stream_dir, f))
@@ -342,18 +372,26 @@ class StreamPoller:
                         continue
 
                     # CURRENT: check in-memory set
-                    # FUTURE:  status = file_tracker.get_status(filepath)
-                    #          if status == "success":     continue
-                    #          if status == "in_progress": pass  ← crashed, reprocess
-                    #          if status is None:          pass  ← new file
+                    # FUTURE:  if audit_trail.is_file_processed(filepath): continue
                     if filepath in processed:
                         continue
 
                     if not is_file_stable(filepath):
-                        logger.debug(f"StreamPoller: file still writing: {filepath}")
+                        logger.debug(
+                            "StreamPoller: file still writing",
+                            file=filepath,
+                            hour=hour_folder,
+                        )
                         continue
 
-                    logger.info(f"StreamPoller: found → {filepath}")
+                    # File is ready — log stage start then hand to processor
+                    log_stage_start(
+                        logger,
+                        stage_name = "file_detection",
+                        file       = filepath,
+                        poller     = "stream",
+                        hour       = hour_folder,
+                    )
 
                     # CURRENT: calls TestProcessor which only prints
                     # FUTURE:  calls real FileProcessor which:
@@ -370,7 +408,7 @@ class StreamPoller:
                     self.processor.process(filepath, file_type="stream")
 
                     # CURRENT: add to in-memory set
-                    # FUTURE:  remove — file_tracking handles this permanently
+                    # FUTURE:  remove — audit_trail.mark_file_success() handles this
                     processed.add(filepath)
 
             time.sleep(self.poll_interval)

@@ -6,7 +6,10 @@
 
 # ── DATA DIRECTORIES ──────────────────────
 data/
- 
+
+# ── LOGS ──────────────────────────────────
+logs/
+
 # ── PYTHON CACHE ──────────────────────────
 __pycache__/
 
@@ -18,8 +21,6 @@ v
 # Python creates these automatically when running code
 *.pyc
 *.pyo
- 
+
 # ── IDE FILES ─────────────────────────────
 .vscode/
-
- 
