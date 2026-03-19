@@ -14,6 +14,6 @@ tenacity==8.2.3                 # Exponential backoff decorators
 pytest==8.1.1                   # Test runner
 pytest-cov==5.0.0               # Coverage reports
 freezegun==1.4.0                # Freeze time in SLA / timestamp tests
-great_expectations==0.21.1      # Data quality testing
+great_expectations==1.15.0      # Data quality testing
 
 PyYAML==6.0.1                   # config.yaml parsing

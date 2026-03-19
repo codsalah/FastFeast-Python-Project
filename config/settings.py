@@ -4,7 +4,7 @@ from __future__ import annotations
 import os
 from functools import lru_cache
 from pathlib import Path
-from typing import List
+from typing import List, Union
 
 from pydantic import Field, field_validator, model_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
@@ -93,11 +93,11 @@ class AlertConfig(BaseSettings):
     smtp_port: int     = Field(default=587,               alias="SMTP_PORT")
     smtp_user: str     = Field(default="",                alias="SMTP_USER")
     smtp_password: str = Field(default="",                alias="SMTP_PASSWORD")
-    sender_name: str   = Field(default="FastFeast Pipeline", alias="SENDER_NAME")  # ← ADD THIS
+    sender_name: str   = Field(default="FastFeast Pipeline", alias="SENDER_NAME")
 
     # parsing csv list of configs as list of strings 
-    alert_recipients: List[str]  = Field(default_factory=list, alias="ALERT_RECIPIENTS")
-    report_recipients: List[str] = Field(default_factory=list, alias="REPORT_RECIPIENTS")
+    alert_recipients: Union[str, List[str]]  = Field(default_factory=list, alias="ALERT_RECIPIENTS")
+    report_recipients: Union[str, List[str]] = Field(default_factory=list, alias="REPORT_RECIPIENTS")
 
     orphan_rate_threshold: float = Field(default=0.05, alias="MAX_ORPHAN_RATE")
     error_rate_threshold: float  = Field(default=0.10, alias="MAX_DUPLICATE_RATE")

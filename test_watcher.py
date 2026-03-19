@@ -22,6 +22,7 @@ import pipeline.watcher as watcher_module
 from datetime import datetime
 from pipeline.watcher import BatchPoller, StreamPoller
 from pipeline.logging.logger import configure_logging
+import pipeline.alerting as alerting
 
 # ── Constants ─────────────────────────────────────────────────
 BATCH_DIR  = "scripts/data/input/batch"
@@ -118,6 +119,7 @@ def main():
     batch_poller = BatchPoller(
         batch_base_dir = BATCH_DIR,
         processor      = processor,
+        alerter        = alerting,
         poll_interval  = BATCH_POLL_INTERVAL
     )
 
