@@ -87,10 +87,13 @@ class AlertConfig(BaseSettings):
         populate_by_name=True,
     )
 
+    enabled: bool = Field(default=True, alias="ALERTING_ENABLED") 
+
     smtp_host: str     = Field(default="smtp.gmail.com",  alias="SMTP_HOST")
     smtp_port: int     = Field(default=587,               alias="SMTP_PORT")
     smtp_user: str     = Field(default="",                alias="SMTP_USER")
     smtp_password: str = Field(default="",                alias="SMTP_PASSWORD")
+    sender_name: str   = Field(default="FastFeast Pipeline", alias="SENDER_NAME")  # ← ADD THIS
 
     # parsing csv list of configs as list of strings 
     alert_recipients: List[str]  = Field(default_factory=list, alias="ALERT_RECIPIENTS")
