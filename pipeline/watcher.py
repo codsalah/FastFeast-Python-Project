@@ -61,8 +61,8 @@ STREAM_FILES = [
 ]
 
 # Batch window: only watch between these hours
-BATCH_WINDOW_START = 6   # 6AM  — before this, batch never arrives
-BATCH_WINDOW_END   = 14  # 2PM  — past this with files missing → log CRITICAL alert
+BATCH_WINDOW_START = 23   # 11PM  — before this, batch never arrives
+BATCH_WINDOW_END   = 1  # 1AM  — past this with files missing → log CRITICAL alert
 
 
 # ── File stability check ──────────────────────────────────────
@@ -91,23 +91,21 @@ class BatchPoller:
     Watches for today's 13 batch files.
 
     Behaviour:
-    - Before 6AM: sleep until 6AM — batch never arrives this early
-    - 6AM onward: scan every poll_interval seconds until all 13 files found
-    - All 13 done: sleep until 6AM tomorrow — no point scanning again today
-    - If batch still missing after 2PM: log CRITICAL alert once, keep watching
-    - Midnight: reset for the new day
+    - Before 11PM: sleep until 11PM — batch never arrives this early
+    - 11PM onward: scan every poll_interval seconds until all 13 files found
+    - All 13 done: sleep until 11PM tomorrow — no point scanning again today
+    - If batch still missing after 1AM: log CRITICAL alert once, keep watching
+    - 11PM: reset for the new day
     """
 
-    def __init__(self, batch_base_dir: str, processor, poll_interval: int = 60):
+    def __init__(self, batch_base_dir: str, processor, alerter, poll_interval: int = 60):
         self.batch_base_dir = batch_base_dir
         self.processor      = processor
         self.poll_interval  = poll_interval
         self.running        = False
         self._thread        = None
 
-        # FUTURE: add alerter parameter
-        # def __init__(self, batch_base_dir, processor, alerter, poll_interval=60):
-        #     self.alerter = alerter
+        self.alerter = alerter
 
     def start(self):
         self.running = True
@@ -251,11 +249,18 @@ class BatchPoller:
                         missing_count = len(missing),
                     )
 
-                    # FUTURE: send real email alert
-                    # self.alerter.send_async(
-                    #     subject="CRITICAL: Batch files missing",
-                    #     body=f"Date: {today}\nMissing: {missing}"
-                    # )
+                    # Send real email alert
+                    if hasattr(self, "alerter") and self.alerter:
+                        if hasattr(self.alerter, "send_alert"):
+                            self.alerter.send_alert(
+                                error_type="BATCH_FILES_MISSING",
+                                message=f"Date: {today}\nMissing: {missing}"
+                            )
+                        elif hasattr(self.alerter, "send_async"):
+                            self.alerter.send_async(
+                                subject="CRITICAL: Batch files missing",
+                                body=f"Date: {today}\nMissing: {missing}"
+                            )
 
                     # FUTURE: load fallback from yesterday's batch
                     # fallback_dir = self._get_fallback_batch_dir(today)
