@@ -36,15 +36,15 @@ logger = logging.getLogger(__name__)
 
 def get_audit_schema() -> str:
     return """
-    create schema if not exists audit;
+    create schema if not exists pipeline_audit;
     
-    create table if not exists audit.pipeline_run_log (
+    create table if not exists pipeline_audit.pipeline_run_log (
         run_id            serial      primary key,
-        run_date          date        not null default current_date,
+        run_date          timestamptz not null default now(),
         run_type          varchar     not null,
-        triggered_at      timestamp   not null default now(),
-        started_at        timestamp,
-        finished_at       timestamp,
+        triggered_at      timestamptz not null default now(),
+        started_at        timestamptz,
+        finished_at       timestamptz,
         status            varchar     not null default 'running',
         total_files       int         not null default 0,
         successful_files  int         not null default 0,
@@ -56,7 +56,7 @@ def get_audit_schema() -> str:
         error_message     text
     );
     
-    create table if not exists audit.file_tracking (
+    create table if not exists pipeline_audit.file_tracking (
         file_path           varchar     primary key,
         file_type           varchar     not null default '',
         table_name          varchar     not null default '',
@@ -66,12 +66,12 @@ def get_audit_schema() -> str:
         records_quarantined int         not null default 0,
         records_orphaned    int         not null default 0,
         file_size_bytes     bigint      not null default 0,
-        started_at          timestamp,
-        finished_at         timestamp,
-        run_id              int         references audit.pipeline_run_log(run_id)
+        started_at          timestamptz,
+        finished_at         timestamptz,
+        run_id              int         references pipeline_audit.pipeline_run_log(run_id)
     );
     
-    create table if not exists audit.quarantine (
+    create table if not exists pipeline_audit.quarantine (
         quarantine_id    serial      primary key,
         source_file      varchar     not null default '',
         table_name       varchar     not null default '',
@@ -80,11 +80,11 @@ def get_audit_schema() -> str:
         rejection_reason varchar     not null,
         rejection_field  varchar     not null default '',
         rejection_value  varchar     not null default '',
-        quarantined_at   timestamp   not null default now(),
-        run_id           int         references audit.pipeline_run_log(run_id)
+        quarantined_at   timestamptz not null default now(),
+        run_id           int         references pipeline_audit.pipeline_run_log(run_id)
     );
     
-    create table if not exists audit.orphan_staging (
+    create table if not exists pipeline_audit.orphan_staging (
         staging_id       serial      primary key,
         record_type      varchar     not null default '',
         record_id        varchar     not null default '',
@@ -92,15 +92,16 @@ def get_audit_schema() -> str:
         missing_fk_type  varchar     not null default '',
         missing_fk_value varchar     not null default '',
         source_file      varchar     not null default '',
-        arrived_at       timestamp   not null default now(),
-        resolved_at      timestamp,
-        status           varchar     not null default 'pending',
-        expiry_date      date
+        arrived_at       timestamptz not null default now(),
+        resolved_at      timestamptz,
+        signup_date      varchar,
+        expiry_date      date,
+        status           varchar     not null default 'pending'
     );
     
-    create table if not exists audit.pipeline_quality_metrics (
+    create table if not exists pipeline_audit.pipeline_quality_metrics (
         metric_id                serial      primary key,
-        run_id                   int         references audit.pipeline_run_log(run_id),
+        run_id                   int         references pipeline_audit.pipeline_run_log(run_id),
         run_date                 date        not null default current_date,
         file_path                varchar     not null default '',
         table_name               varchar     not null default '',
@@ -118,12 +119,12 @@ def get_audit_schema() -> str:
         null_rate                numeric     not null default 0,
         integrity_rate           numeric     not null default 1,
         processing_latency_sec   numeric     not null default 0,
-        recorded_at              timestamp   not null default now()
+        recorded_at              timestamptz not null default now()
     );
     
-    create table if not exists audit.column_quality_metrics (
+    create table if not exists pipeline_audit.column_quality_metrics (
         col_metric_id int         primary key generated always as identity,
-        metric_id     int         references audit.pipeline_quality_metrics(metric_id),
+        metric_id     int         references pipeline_audit.pipeline_quality_metrics(metric_id),
         table_name    varchar     not null default '',
         column_name   varchar     not null default '',
         total_values  int         not null default 0,
@@ -134,10 +135,10 @@ def get_audit_schema() -> str:
         run_date      date        not null default current_date
     );
     
-    create index if not exists idx_file_tracking_run_id   on audit.file_tracking (run_id);
-    create index if not exists idx_quarantine_run_id       on audit.quarantine (run_id);
-    create index if not exists idx_quality_metrics_run_id  on audit.pipeline_quality_metrics (run_id);
-    create index if not exists idx_orphan_staging_status   on audit.orphan_staging (status, expiry_date);
+    create index if not exists idx_file_tracking_run_id   on pipeline_audit.file_tracking (run_id);
+    create index if not exists idx_quarantine_run_id       on pipeline_audit.quarantine (run_id);
+    create index if not exists idx_quality_metrics_run_id  on pipeline_audit.pipeline_quality_metrics (run_id);
+    create index if not exists idx_orphan_staging_status   on pipeline_audit.orphan_staging (status, expiry_date);
 
     """
 
@@ -165,9 +166,9 @@ def start_run(run_type: str) -> int:
     with get_conn() as conn:
         with conn.cursor() as cursor:
             cursor.execute("""
-            insert into audit.pipeline_run_log 
+            insert into pipeline_audit.pipeline_run_log 
                 (run_date, run_type, triggered_at, started_at, status)
-            values (current_date, %s, now(), now(), 'running')
+            values (now(), %s, now(), now(), 'running')
             returning run_id
             """, (run_type,))
             run_id = cursor.fetchone()[0] # this is the auto-gen run_id
@@ -197,7 +198,7 @@ def register_file(
     """
     with get_cursor() as cur:
         cur.execute("""
-            insert into audit.file_tracking
+            insert into pipeline_audit.file_tracking
                 (file_path, file_type, table_name, status, file_size_bytes, started_at, run_id)
             values (%s, %s, %s, 'processing', %s, now(), %s)
             on conflict (file_path) do update
@@ -232,7 +233,7 @@ def is_file_processed(file_path: str) -> bool:
     with get_dict_cursor() as cur:
         cur.execute(
             """
-            select 1 from audit.file_tracking
+            select 1 from pipeline_audit.file_tracking
             where file_path = %s and status = 'success'
             limit 1
             """,
@@ -271,7 +272,7 @@ def mark_file_success(
     """
     with get_cursor() as cur:
         cur.execute("""
-            update audit.file_tracking
+            update pipeline_audit.file_tracking
             set
                 status = 'success',
                 records_found = %s,
@@ -305,7 +306,7 @@ def mark_file_failed(file_path: str, error_message: str) -> None:
     """
     with get_cursor() as cur:
         cur.execute("""
-            update audit.file_tracking
+            update pipeline_audit.file_tracking
             set
                 status = 'failed',
                 finished_at = now()
