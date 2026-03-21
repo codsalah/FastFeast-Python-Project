@@ -28,7 +28,7 @@ from typing import Optional
 
 import psycopg2.extras
 
-from pipeline.utils.db import get_conn, get_cursor, get_dict_cursor
+from pipeline.utils.db import get_conn, get_cursor, get_dict_cursor, execute_values
 from pipeline.utils.retry import db_retry
 
 logger = logging.getLogger(__name__)
@@ -322,8 +322,96 @@ def mark_file_failed(file_path: str, error_message: str) -> None:
     )
 
 
-# TODO: # Publish phase (complete_run function)
-# TODO: # Quarantine phase (write_quarantine_batch function)
+@db_retry
+def complete_run(
+    run_id: int,
+    status: str,
+    total_files: int,
+    successful_files: int,
+    failed_files: int,
+    total_records: int,
+    total_loaded: int,
+    total_quarantined: int,
+    total_orphaned: int,
+    error_message: Optional[str] = None
+) -> None:
+    """
+    Finalize the pipeline_run_log entry with aggregate statistics.
+    """
+    with get_cursor() as cur:
+        cur.execute("""
+            UPDATE pipeline_audit.pipeline_run_log
+            SET 
+                status = %s,
+                finished_at = now(),
+                total_files = %s,
+                successful_files = %s,
+                failed_files = %s,
+                total_records = %s,
+                total_loaded = %s,
+                total_quarantined = %s,
+                total_orphaned = %s,
+                error_message = %s
+            WHERE run_id = %s
+        """, (
+            status, total_files, successful_files, failed_files,
+            total_records, total_loaded, total_quarantined, total_orphaned,
+            error_message, run_id
+        ))
+    logger.info(f"Run {run_id} completed with status: {status}")
+
+
+@db_retry
+def write_quarantine_batch(
+    records: list[dict],
+    source_file: str,
+    table_name: str,
+    reason: str,
+    field: str,
+    run_id: int
+) -> None:
+    """
+    Bulk move bad data into the quarantine table.
+    We dump the ENTIRE record as JSON so developers can see the raw bad data.
+    """
+    if not records:
+        return
+
+    prepared_rows = []
+    for rec in records:
+        # Try to find a meaningful record_id, fallback to 'unknown'
+        record_id = str(rec.get('order_id', rec.get('customer_id', rec.get('ticket_id', rec.get('id', 'unknown')))))
+        
+        # Get the actual value that caused the rejection if possible
+        rejection_value = str(rec.get(field, 'null'))
+
+        prepared_rows.append({
+            "source_file": source_file,
+            "table_name": table_name,
+            "record_id": record_id,
+            "record_data": json.dumps(rec), 
+            "rejection_reason": reason,
+            "rejection_field": field,
+            "rejection_value": rejection_value,
+            "run_id": run_id,
+            "quarantined_at": "now()" # Database will use default, but execute_values needs keys to match
+        })
+
+    # Note: execute_values in db.py handles the SQL construction
+    sql = """
+    INSERT INTO pipeline_audit.quarantine 
+    (source_file, table_name, record_id, record_data, rejection_reason, rejection_field, rejection_value, run_id, quarantined_at)
+    VALUES %s
+    """
+    
+    # We need to manually match columns for execute_values
+    # Or just use the tool since it extracts keys from the first record.
+    # But wait, execute_values in db.py uses the dict keys.
+    # Our table has quarantined_at with default, but if we pass it in values it must be there.
+    
+    execute_values(sql, prepared_rows)
+    logger.warning(f"Quarantined {len(records)} records from {source_file} (Reason: {reason})")
+
 # TODO: # Orphan phase (write_orphan_batch function)
 # TODO: # Quality metrics phase 
     # TODO: # (write_quality_metrics function
