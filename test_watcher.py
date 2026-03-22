@@ -18,15 +18,16 @@ import os
 import sys
 import signal
 import pipeline.watcher as watcher_module
+import pipeline.logging.audit_trail as audit_trail
 
 from datetime import datetime
 from pipeline.watcher import BatchPoller, StreamPoller
-from pipeline.logging.logger import configure_logging
-import pipeline.alerting as alerting
+from pipeline.utils.db import init_pool
+from config.settings import Settings
 
 # ── Constants ─────────────────────────────────────────────────
-BATCH_DIR  = "scripts/data/input/batch"
-STREAM_DIR = "scripts/data/input/stream"
+BATCH_DIR  = "data/input/batch"
+STREAM_DIR = "data/input/stream"
 
 BATCH_POLL_INTERVAL  = 10   # seconds — 60 in production
 STREAM_POLL_INTERVAL = 5    # seconds — 30 in production
@@ -52,9 +53,10 @@ class TestProcessor:
     live visibility during testing.
     """
 
-    def __init__(self):
+    def __init__(self, run_id: int):
         self.batch_count  = 0
         self.stream_count = 0
+        self.run_id       = run_id
 
     def process(self, filepath: str, file_type: str) -> None:
         filename   = os.path.basename(filepath)
@@ -63,10 +65,12 @@ class TestProcessor:
         if file_type == "batch":
             self.batch_count += 1
             print(f"\n  [BATCH  {self.batch_count:02d}] {parent_dir}/{filename}")
+            audit_trail.register_file(self.run_id, filepath, "csv" if filename.endswith(".csv") else "json", "batch_" + filename, os.path.getsize(filepath))
 
         elif file_type == "stream":
             self.stream_count += 1
             print(f"\n  [STREAM {self.stream_count:02d}] {parent_dir}/{filename}")
+            audit_trail.register_file(self.run_id, filepath, "csv" if filename.endswith(".csv") else "json", "stream_" + filename, os.path.getsize(filepath))
 
 
 # ── Shutdown ──────────────────────────────────────────────────
@@ -114,7 +118,16 @@ def print_banner():
 # ── Main ──────────────────────────────────────────────────────
 def main():
 
-    processor = TestProcessor()
+    # 0. Initialize DB Pool
+    settings = Settings()
+    init_pool(settings)
+
+    # 1. Initialize Audit Schema and Start Run
+    audit_trail.ensure_audit_schema()
+    run_id = audit_trail.start_run(run_type="watcher_test")
+    print(f"  Audit Trail initialized — Run ID: {run_id}")
+
+    processor = TestProcessor(run_id=run_id)
 
     batch_poller = BatchPoller(
         batch_base_dir = BATCH_DIR,
