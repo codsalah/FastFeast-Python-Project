@@ -60,13 +60,13 @@ def detect_orphans(record, dimension_ids):
     ## --- CHECK customer_id ---
     customer_id = record.get("customer_id")
     if customer_id is not None:
-        if customer_id not in dimension_ids.get("customer_ids", set()):
+        if int(customer_id) not in dimension_ids.get("customer_ids", set()):
             orphaned_fields.append({
                 "field":       "customer_id",
                 "raw_id":      customer_id,
                 "orphan_type": "customer"
             })
-
+            
     # --- CHECK driver_id ---
     driver_id = record.get("driver_id")
     if driver_id is not None:
@@ -110,13 +110,15 @@ def record_orphan_tracking(conn, order_id, orphaned_fields):
     if not orphaned_fields:
         return 0
 
+    # FOCUS HERE <_______________________________________>
     sql = """
-        INSERT INTO fastfeast.orphan_tracking
-            (order_id, orphan_type, raw_id, is_resolved, retry_count, detected_at)
+        INSERT INTO pipeline_audit.orphan_staging
+            (record_type, record_id, missing_fk_type, missing_fk_value,
+             source_file, arrived_at, status)
         VALUES
-            (%s, %s, %s, false, 0, %s)
+            (%s, %s, %s, %s, %s, %s, 'pending')
         ON CONFLICT DO NOTHING """
-
+    
     # WHY ON CONFLICT DO NOTHING? 
     # duplicate tracking rows not inserted -> [layer 2 of idempotency handling]
     # This makes the function idempotent —> safe to call multiple times.
