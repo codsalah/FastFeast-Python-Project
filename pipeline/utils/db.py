@@ -13,14 +13,15 @@ from typing import Generator, Iterator
 
 import psycopg2
 import psycopg2.extras  # RealDictCursor
-from psycopg2 import pool as pg_pool
+from psycopg2 import pool as pg_pool, OperationalError, InterfaceError
+from psycopg2.extensions import TransactionRollbackError
 
 from config.settings import Settings
 
 logger = logging.getLogger(__name__)
 
 # Module-level singleton — set once by init_pool(), read by get_conn()
-_pool: pg_pool.SimpleConnectionPool | None = None
+_pool: pg_pool.ThreadedConnectionPool | None = None
 
 
 # Initialisation
@@ -38,7 +39,7 @@ def init_pool(settings: Settings) -> None:
         logger.warning("db.init_pool called while pool already exists — closing old pool")
         _pool.closeall()
 
-    _pool = pg_pool.SimpleConnectionPool(
+    _pool = pg_pool.ThreadedConnectionPool(
         minconn=settings.db.pool_min,
         maxconn=settings.db.pool_max,
         dsn=settings.db.dsn,
@@ -56,6 +57,9 @@ def init_pool(settings: Settings) -> None:
             "pool_max": settings.db.pool_max,
         },
     )
+
+    # Register JSONB support for dict objects 
+    psycopg2.extras.register_json(conn_or_pool=_pool, globally=True)
 
 
 def close_pool() -> None:
@@ -91,21 +95,31 @@ def health_check() -> bool:
 
 @contextmanager
 def get_conn() -> Generator[psycopg2.extensions.connection, None, None]:
-    """Borrow a connection from the pool."""
+    """Borrow a connection with error handling for deadlocks and timeouts."""
     if _pool is None:
-        raise RuntimeError(
-            "DB pool not initialised. Call init_pool(settings) in main.py first."
-        )
+        raise RuntimeError("DB pool not initialised. Call init_pool(settings) in main.py first.")
 
-    conn = _pool.getconn()
+    try:
+        conn = _pool.getconn()
+    except pg_pool.PoolError as exc:
+        logger.error("db_pool_exhausted", extra={"error": str(exc)})
+        raise
+
     try:
         yield conn
         conn.commit()
+    except TransactionRollbackError as exc:
+        conn.rollback()
+        logger.error("db_deadlock_detected", extra={"error": str(exc)})
+        raise
+    except (OperationalError, InterfaceError) as exc:
+        conn.rollback()
+        logger.error("db_connection_error", extra={"error": str(exc)})
+        raise
     except Exception:
         conn.rollback()
         raise
     finally:
-        # putconn resets autocommit state (safe to reuse)
         _pool.putconn(conn)
 
 
