@@ -17,10 +17,9 @@ def send_to_quarantine(
     pipeline_run_id=None
 ):
 
-    sql=""" INSERT INTO fastfeast.quarantine (source_file, entity_type, raw_record, error_type, error_details,
-                                                orphan_type, raw_orphan_id, pipeline_run_id, quarantined_at)
-            VALUES:
-                    (%s, %s, %s, %s, %s, %s, %s, %s, %s)"""
+    sql = """INSERT INTO fastfeast.quarantine (source_file, entity_type, raw_record, error_type, error_details,
+                                               orphan_type, raw_orphan_id, pipeline_run_id, quarantined_at)
+             VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s)"""
         
 
     raw_record_json = json.dumps(raw_record, default=str) #Convert the raw_record dict → JSON string
@@ -32,17 +31,17 @@ def send_to_quarantine(
     try:
         with get_cursor() as cur:
             cur.execute(sql, (
-                source_file,        
-                entity_type,      
-                raw_record_json,    
-                error_type,         
-                error_details,      
-                orphan_type,        
-                safe_orphan_id,     
-                pipeline_run_id,    
-                now                 
+                source_file,
+                entity_type,
+                raw_record_json,
+                error_type,
+                error_details,
+                orphan_type,
+                safe_orphan_id,
+                pipeline_run_id,
+                now
             ))
-
+ 
         logger.debug(
             f"[QUARANTINE] 1 record saved | "
             f"entity={entity_type} | error_type={error_type} | file={source_file}"
@@ -102,6 +101,7 @@ def send_batch_to_quarantine(conn, failed_records):
         saved = 0
         for rec in failed_records:
             success = send_to_quarantine(
+                conn,
                 source_file=rec.get("source_file",    "unknown"),
                 entity_type=rec.get("entity_type",    "unknown"),
                 raw_record=rec.get("raw_record",       {}),
@@ -113,7 +113,7 @@ def send_batch_to_quarantine(conn, failed_records):
             )
             if success:
                 saved += 1
-
+ 
         logger.info(
             f"[QUARANTINE] Fallback complete — {saved}/{len(failed_records)} records saved."
         )
