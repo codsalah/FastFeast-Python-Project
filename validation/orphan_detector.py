@@ -112,13 +112,11 @@ def record_orphan_tracking(conn, order_id, orphaned_fields):
 
     # FOCUS HERE <_______________________________________>
     sql = """
-        INSERT INTO pipeline_audit.orphan_staging
-            (record_type, record_id, missing_fk_type, missing_fk_value,
-             source_file, arrived_at, status)
+        INSERT INTO fastfeast.orphan_tracking
+            (order_id, orphan_type, raw_id, is_resolved, retry_count, detected_at)
         VALUES
-            (%s, %s, %s, %s, %s, %s, 'pending')
+            (%s, %s, %s, false, 0, %s)
         ON CONFLICT DO NOTHING """
-    
     # WHY ON CONFLICT DO NOTHING? 
     # duplicate tracking rows not inserted -> [layer 2 of idempotency handling]
     # This makes the function idempotent —> safe to call multiple times.
