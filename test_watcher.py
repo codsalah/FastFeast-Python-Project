@@ -1,161 +1,125 @@
 """
 test_watcher.py
-───────────────
-Live watcher test — runs until Ctrl+C.
-
-How to use:
-    Terminal 1 (project root): python test_watcher.py
-    Terminal 2 (scripts/):      python generate_batch_data.py --date 2026-03-18
-                                python generate_stream_data.py --date 2026-03-18 --hour 9
-
-Logging:
-    All structured JSON logs are written by watcher.py itself.
-    This file only calls configure_logging() once to set up the log file.
-    Logs are written to: logs/pipeline.log
+Live watcher test that verifies file detection, registration, and tracking.
+Run with Ctrl+C to stop.
 """
 
 import os
 import sys
 import signal
-import pipeline.watcher as watcher_module
-import pipeline.logging.audit_trail as audit_trail
-
 from datetime import datetime
+from pathlib import Path
+
+sys.path.insert(0, str(Path(__file__).parent))
+
+import pipeline.watcher as watcher_module
 from pipeline.watcher import BatchPoller, StreamPoller
 from pipeline.utils.db import init_pool
-from config.settings import Settings
+from config.settings import get_settings
+from pipeline.logging.logger import configure_logging
+from pipeline.logging import audit_trail
+import pipeline.alerting as alerting
 
-# ── Constants ─────────────────────────────────────────────────
-BATCH_DIR  = "data/input/batch"
-STREAM_DIR = "data/input/stream"
+BATCH_DIR = "scripts/data/input/batch"
+STREAM_DIR = "scripts/data/input/stream"
+BATCH_POLL_INTERVAL = 10
+STREAM_POLL_INTERVAL = 5
 
-BATCH_POLL_INTERVAL  = 10   # seconds — 60 in production
-STREAM_POLL_INTERVAL = 5    # seconds — 30 in production
-
-# ── Override batch window so test works at any hour of day ────
+# Override batch window for testing
 watcher_module.BATCH_WINDOW_START = datetime.now().hour
 watcher_module.BATCH_WINDOW_END = min(datetime.now().hour + 8, 23)
 
-# ── Logging setup ─────────────────────────────────────────────
-# Called once here — watcher.py handles all actual log calls
+#watcher_module.BATCH_WINDOW_END = datetime.now().hour # to cheack alerting for missing batch files
+
 configure_logging(log_dir="logs", level="INFO")
 
 
-# ── Processor ─────────────────────────────────────────────────
 class TestProcessor:
-    """
-    Receives detected files from both pollers.
-    Prints each file to terminal with a running counter.
-    In production this would be replaced by the real FileProcessor.
-
-    Note: No logging here — watcher.py already logs every file detection
-    via log_stage_start(). This class only prints to terminal for
-    live visibility during testing.
-    """
-
     def __init__(self, run_id: int):
-        self.batch_count  = 0
+        self.run_id = run_id
+        self.batch_count = 0
         self.stream_count = 0
-        self.run_id       = run_id
 
     def process(self, filepath: str, file_type: str) -> None:
-        filename   = os.path.basename(filepath)
-        parent_dir = os.path.basename(os.path.dirname(filepath))
+        filename = os.path.basename(filepath)
+        folder = os.path.basename(os.path.dirname(filepath))
+
+        audit_trail.register_file(self.run_id, filepath, file_type)
 
         if file_type == "batch":
             self.batch_count += 1
-            print(f"\n  [BATCH  {self.batch_count:02d}] {parent_dir}/{filename}")
-            audit_trail.register_file(self.run_id, filepath, "csv" if filename.endswith(".csv") else "json", "batch_" + filename, os.path.getsize(filepath))
-
-        elif file_type == "stream":
+            print(f"[BATCH {self.batch_count:02d}] {folder}/{filename}")
+        else:
             self.stream_count += 1
-            print(f"\n  [STREAM {self.stream_count:02d}] {parent_dir}/{filename}")
-            audit_trail.register_file(self.run_id, filepath, "csv" if filename.endswith(".csv") else "json", "stream_" + filename, os.path.getsize(filepath))
+            print(f"[STREAM {self.stream_count:02d}] {folder}/{filename}")
+
+        audit_trail.mark_file_success(filepath, records_total=1, records_loaded=1, records_quarantined=0)
 
 
-# ── Shutdown ──────────────────────────────────────────────────
-def build_shutdown_handler(batch_poller, stream_poller, processor):
-    """
-    Returns a shutdown function that stops both pollers
-    and prints a summary before exiting.
-    Registered as Ctrl+C handler before join() is called.
-    """
+def shutdown_handler(batch_poller, stream_poller, processor, run_id):
     def shutdown(sig, frame):
-        print("\n\n" + "=" * 55)
-        print("  Stopping watchers...")
+        print("\n\nStopping watchers...")
         batch_poller.stop()
         stream_poller.stop()
-        print(f"  Batch files detected:  {processor.batch_count}")
-        print(f"  Stream files detected: {processor.stream_count}")
-        print(f"  Logs written to:       logs/pipeline.log")
-        print("=" * 55)
-        sys.exit(0)
 
+        audit_trail.complete_run(
+            run_id=run_id,
+            status="success",
+            total_files=processor.batch_count + processor.stream_count,
+            successful_files=processor.batch_count + processor.stream_count,
+            failed_files=0,
+            total_records=processor.batch_count + processor.stream_count,
+            total_loaded=processor.batch_count + processor.stream_count,
+            total_quarantined=0,
+            total_orphaned=0,
+        )
+
+        print(f"\nBatch files: {processor.batch_count}")
+        print(f"Stream files: {processor.stream_count}")
+        print(f"Run ID: {run_id}")
+        print("\nLogs: logs/pipeline.log")
+        sys.exit(0)
     return shutdown
 
 
-# ── Banner ────────────────────────────────────────────────────
-def print_banner():
-    print("=" * 55)
-    print("  FastFeast — Live Watcher Test")
-    print("=" * 55)
-    print(f"  Batch dir:    {BATCH_DIR}")
-    print(f"  Stream dir:   {STREAM_DIR}")
-    print(f"  Batch window: {watcher_module.BATCH_WINDOW_START}:00 — {watcher_module.BATCH_WINDOW_END}:00")
-    print(f"  Batch poll:   every {BATCH_POLL_INTERVAL}s  (production: 60s)")
-    print(f"  Stream poll:  every {STREAM_POLL_INTERVAL}s  (production: 30s)")
-    print(f"  Logs:         logs/pipeline.log")
-    print()
-    print("  Drop files from Terminal 2:")
-    print("  cd scripts")
-    print("  python generate_batch_data.py --date 2026-03-18")
-    print("  python generate_stream_data.py --date 2026-03-18 --hour 9")
-    print()
-    print("  Press Ctrl+C to stop")
-    print("=" * 55)
-
-
-# ── Main ──────────────────────────────────────────────────────
 def main():
-
-    # 0. Initialize DB Pool
-    settings = Settings()
+    settings = get_settings()
     init_pool(settings)
+    audit_trail.ensure_warehouse_schema()
 
-    # 1. Initialize Audit Schema and Start Run
-    audit_trail.ensure_audit_schema()
-    run_id = audit_trail.start_run(run_type="watcher_test")
-    print(f"  Audit Trail initialized — Run ID: {run_id}")
-
+    run_id = audit_trail.start_run("watcher_test")
     processor = TestProcessor(run_id=run_id)
 
     batch_poller = BatchPoller(
-        batch_base_dir = BATCH_DIR,
-        processor      = processor,
-        alerter        = alerting,
-        poll_interval  = BATCH_POLL_INTERVAL
+        batch_base_dir=BATCH_DIR,
+        processor=processor,
+        alerter=alerting,
+        poll_interval=BATCH_POLL_INTERVAL
     )
 
     stream_poller = StreamPoller(
-        stream_base_dir = STREAM_DIR,
-        processor       = processor,
-        poll_interval   = STREAM_POLL_INTERVAL
+        stream_base_dir=STREAM_DIR,
+        processor=processor,
+        poll_interval=STREAM_POLL_INTERVAL
     )
 
-    # Register Ctrl+C shutdown handler
-    shutdown = build_shutdown_handler(batch_poller, stream_poller, processor)
+    shutdown = shutdown_handler(batch_poller, stream_poller, processor, run_id)
     signal.signal(signal.SIGINT, shutdown)
 
-    print_banner()
+    print(f"Batch dir: {BATCH_DIR}")
+    print(f"Stream dir: {STREAM_DIR}")
+    print("\nGenerate test data in another terminal:")
+    print("  cd scripts")
+    print("  python generate_batch_data.py --date 2026-03-27")
+    print("  python generate_stream_data.py --date 2026-03-27 --hour 9")
+    print("\nPress Ctrl+C to stop\n")
 
-    batch_thread  = batch_poller.start()
-    stream_thread = stream_poller.start()
+    batch_poller.start()
+    stream_poller.start()
 
-    # Keep main thread alive — join(timeout=1) lets Ctrl+C fire on Windows
     try:
         while True:
-            batch_thread.join(timeout=1)
-            stream_thread.join(timeout=1)
+            pass
     except KeyboardInterrupt:
         shutdown(None, None)
 
