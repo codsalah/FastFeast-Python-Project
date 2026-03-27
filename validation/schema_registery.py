@@ -76,7 +76,7 @@ class SchemaContract:
 
 
 # ------------------------------------------------------------------------- #
-# ------- Batch reference / lookup tables (static, delivered as is) ------- #
+# ----------------------- Warehouse Target Shapes ------------------------- #
 # ------------------------------------------------------------------------- #
 
 DATE_DIM = SchemaContract(
@@ -107,7 +107,7 @@ CITIES = SchemaContract(
     columns=[
         ColumnContract("city_id", "int", nullable=False, min_value=1),
         ColumnContract("city_name", "str", regex=TITLE_CASE_REGEX),
-        ColumnContract("country", "str", allowed_values={"Egypt"}), # That is our business for NOW
+        ColumnContract("country", "str", allowed_values={"Egypt"}), 
     ],
 )
 
@@ -213,7 +213,7 @@ PRIORITIES = SchemaContract(
 )
 
 # ------------------------------------------------------------------------- #
-# - Batch drift tables ---------------------------------------------------- #
+# ------- Warehouse Target Shapes (Entity / Drift Tables) ----------------- #
 # ------------------------------------------------------------------------- #
 
 CUSTOMERS = SchemaContract(
@@ -223,7 +223,7 @@ CUSTOMERS = SchemaContract(
     natural_key=["customer_id"],
     columns=[
         ColumnContract("customer_key", "int", nullable=False, min_value=-1),
-        ColumnContract("customer_id", "int", nullable=True, min_value=-1), # Natural key from source
+        ColumnContract("customer_id", "int", nullable=True, min_value=-1), 
         ColumnContract("customer_name_masked", "str"),
         ColumnContract("gender", "str", allowed_values={"male", "female"}),
         ColumnContract("segment_name", "str", allowed_values={"Regular", "VIP"}),
@@ -487,8 +487,291 @@ QUALITY_METRICS = SchemaContract(
 )
 
 
+# ------------------------------------------------------------------------- #
+# ------- Source (Raw) Data Contracts - Precise OLTP Shape ---------------- #
+# ------------------------------------------------------------------------- #
+
+SOURCE_CUSTOMERS = SchemaContract(
+    entity="source_customers",
+    source_format="csv",
+    source_layer="batch",
+    natural_key=["customer_id"],
+    columns=[
+        ColumnContract("customer_id", "int", nullable=False),
+        ColumnContract("full_name", "str", regex=TITLE_CASE_REGEX),
+        ColumnContract("email", "str", regex=EMAIL_REGEX),
+        ColumnContract("phone", "str", regex=PHONE_REGEX),
+        ColumnContract("region_id", "int", nullable=False),
+        ColumnContract("segment_id", "int", nullable=False),
+        ColumnContract("signup_date", "date"),
+        ColumnContract("gender", "str", allowed_values={"male", "female"}),
+        ColumnContract("created_at", "datetime"),
+        ColumnContract("updated_at", "datetime"),
+    ],
+)
+
+SOURCE_DRIVERS = SchemaContract(
+    entity="source_drivers",
+    source_format="csv",
+    source_layer="batch",
+    natural_key=["driver_id"],
+    columns=[
+        ColumnContract("driver_id", "int", nullable=False),
+        ColumnContract("driver_name", "str", regex=TITLE_CASE_REGEX),
+        ColumnContract("driver_phone", "str", regex=PHONE_REGEX),
+        ColumnContract("national_id", "str", regex=EGYPTIAN_ID_REGEX),
+        ColumnContract("region_id", "int", nullable=False),
+        ColumnContract("shift", "str", allowed_values={"morning", "evening", "night"}),
+        ColumnContract("vehicle_type", "str", allowed_values={"bike", "motorbike", "car"}),
+        ColumnContract("hire_date", "date"),
+        ColumnContract("rating_avg", "float", min_value=1.0, max_value=5.0),
+        ColumnContract("on_time_rate", "float", min_value=0.0, max_value=1.0),
+        ColumnContract("cancel_rate", "float", min_value=0.0, max_value=1.0),
+        ColumnContract("completed_deliveries", "int", min_value=0),
+        ColumnContract("is_active", "bool"),
+        ColumnContract("created_at", "datetime"),
+        ColumnContract("updated_at", "datetime"),
+    ],
+)
+
+SOURCE_RESTAURANTS = SchemaContract(
+    entity="source_restaurants",
+    source_format="json",
+    source_layer="batch",
+    natural_key=["restaurant_id"],
+    columns=[
+        ColumnContract("restaurant_id", "int", nullable=False),
+        ColumnContract("restaurant_name", "str"),
+        ColumnContract("region_id", "int", nullable=False),
+        ColumnContract("category_id", "int", nullable=False),
+        ColumnContract("price_tier", "str", allowed_values={"Low", "Mid", "High"}),
+        ColumnContract("rating_avg", "float", min_value=1.0, max_value=5.0),
+        ColumnContract("prep_time_avg_min", "int", min_value=1),
+        ColumnContract("is_active", "bool"),
+        ColumnContract("created_at", "datetime"),
+        ColumnContract("updated_at", "datetime"),
+    ],
+)
+
+SOURCE_AGENTS = SchemaContract(
+    entity="source_agents",
+    source_format="csv",
+    source_layer="batch",
+    natural_key=["agent_id"],
+    columns=[
+        ColumnContract("agent_id", "int", nullable=False),
+        ColumnContract("agent_name", "str", regex=TITLE_CASE_REGEX),
+        ColumnContract("agent_email", "str", regex=EMAIL_REGEX),
+        ColumnContract("agent_phone", "str", regex=PHONE_REGEX),
+        ColumnContract("team_id", "int", nullable=False),
+        ColumnContract("skill_level", "str", allowed_values={"Junior", "Mid", "Senior", "Lead"}),
+        ColumnContract("hire_date", "date"),
+        ColumnContract("avg_handle_time_min", "int", min_value=1),
+        ColumnContract("resolution_rate", "float", min_value=0.0, max_value=1.0),
+        ColumnContract("csat_score", "float", min_value=1.0, max_value=5.0),
+        ColumnContract("is_active", "bool"),
+        ColumnContract("created_at", "datetime"),
+        ColumnContract("updated_at", "datetime"),
+    ],
+)
+
+SOURCE_CITIES = SchemaContract(
+    entity="source_cities",
+    source_format="json",
+    source_layer="batch",
+    natural_key=["city_id"],
+    columns=[
+        ColumnContract("city_id", "int", nullable=False),
+        ColumnContract("city_name", "str", regex=TITLE_CASE_REGEX),
+        ColumnContract("country", "str"),
+        ColumnContract("timezone", "str"),
+    ],
+)
+
+SOURCE_REGIONS = SchemaContract(
+    entity="source_regions",
+    source_format="csv",
+    source_layer="batch",
+    natural_key=["region_id"],
+    columns=[
+        ColumnContract("region_id", "int", nullable=False),
+        ColumnContract("region_name", "str"),
+        ColumnContract("city_id", "int", nullable=False),
+        ColumnContract("delivery_base_fee", "float"),
+    ],
+)
+
+SOURCE_SEGMENTS = SchemaContract(
+    entity="source_segments",
+    source_format="csv",
+    source_layer="batch",
+    natural_key=["segment_id"],
+    columns=[
+        ColumnContract("segment_id", "int", nullable=False),
+        ColumnContract("segment_name", "str"),
+        ColumnContract("discount_pct", "int"),
+        ColumnContract("priority_support", "bool"),
+    ],
+)
+
+SOURCE_CATEGORIES = SchemaContract(
+    entity="source_categories",
+    source_format="csv",
+    source_layer="batch",
+    natural_key=["category_id"],
+    columns=[
+        ColumnContract("category_id", "int", nullable=False),
+        ColumnContract("category_name", "str"),
+    ],
+)
+
+SOURCE_TEAMS = SchemaContract(
+    entity="source_teams",
+    source_format="csv",
+    source_layer="batch",
+    natural_key=["team_id"],
+    columns=[
+        ColumnContract("team_id", "int", nullable=False),
+        ColumnContract("team_name", "str"),
+    ],
+)
+
+SOURCE_REASON_CATEGORIES = SchemaContract(
+    entity="source_reason_categories",
+    source_format="csv",
+    source_layer="batch",
+    natural_key=["reason_category_id"],
+    columns=[
+        ColumnContract("reason_category_id", "int", nullable=False),
+        ColumnContract("category_name", "str"),
+    ],
+)
+
+SOURCE_REASONS = SchemaContract(
+    entity="source_reasons",
+    source_format="csv",
+    source_layer="batch",
+    natural_key=["reason_id"],
+    columns=[
+        ColumnContract("reason_id", "int", nullable=False),
+        ColumnContract("reason_name", "str"),
+        ColumnContract("reason_category_id", "int", nullable=False),
+        ColumnContract("severity_level", "int"),
+        ColumnContract("typical_refund_pct", "float"),
+    ],
+)
+
+SOURCE_CHANNELS = SchemaContract(
+    entity="source_channels",
+    source_format="csv",
+    source_layer="batch",
+    natural_key=["channel_id"],
+    columns=[
+        ColumnContract("channel_id", "int", nullable=False),
+        ColumnContract("channel_name", "str"),
+    ],
+)
+
+SOURCE_PRIORITIES = SchemaContract(
+    entity="source_priorities",
+    source_format="csv",
+    source_layer="batch",
+    natural_key=["priority_id"],
+    columns=[
+        ColumnContract("priority_id", "int", nullable=False),
+        ColumnContract("priority_code", "str"),
+        ColumnContract("priority_name", "str"),
+        ColumnContract("sla_first_response_min", "int"),
+        ColumnContract("sla_resolution_min", "int"),
+    ],
+)
+
+SOURCE_ORDERS = SchemaContract(
+    entity="source_orders",
+    source_format="json",
+    source_layer="stream",
+    natural_key=["order_id"],
+    columns=[
+        ColumnContract("order_id", "str", nullable=False, regex=UUID_REGEX),
+        ColumnContract("customer_id", "int", nullable=False),
+        ColumnContract("restaurant_id", "int", nullable=False),
+        ColumnContract("driver_id", "int", nullable=False),
+        ColumnContract("region_id", "int", nullable=False),
+        ColumnContract("order_amount", "float", min_value=0.0),
+        ColumnContract("delivery_fee", "float", min_value=0.0),
+        ColumnContract("discount_amount", "float", min_value=0.0),
+        ColumnContract("total_amount", "float", min_value=0.0),
+        ColumnContract("order_status", "str", allowed_values={"Delivered", "Cancelled", "Refunded"}),
+        ColumnContract("payment_method", "str", allowed_values={"card", "cash", "wallet"}),
+        ColumnContract("order_created_at", "datetime", nullable=False),
+        ColumnContract("delivered_at", "datetime"),
+    ],
+)
+
+SOURCE_TICKETS = SchemaContract(
+    entity="source_tickets",
+    source_format="csv",
+    source_layer="stream",
+    natural_key=["ticket_id"],
+    columns=[
+        ColumnContract("ticket_id", "str", nullable=False, regex=UUID_REGEX),
+        ColumnContract("order_id", "str", nullable=False, regex=UUID_REGEX),
+        ColumnContract("customer_id", "int", nullable=False),
+        ColumnContract("driver_id", "int"),
+        ColumnContract("restaurant_id", "int"),
+        ColumnContract("agent_id", "int", nullable=False),
+        ColumnContract("reason_id", "int", nullable=False),
+        ColumnContract("priority_id", "int", nullable=False),
+        ColumnContract("channel_id", "int", nullable=False),
+        ColumnContract("status", "str", allowed_values={"Resolved", "Closed", "Reopened", "Open", "InProgress"}),
+        ColumnContract("refund_amount", "float", min_value=0.0),
+        ColumnContract("created_at", "datetime", nullable=False),
+        ColumnContract("first_response_at", "datetime"),
+        ColumnContract("resolved_at", "datetime"),
+        ColumnContract("sla_first_due_at", "datetime"),
+        ColumnContract("sla_resolve_due_at", "datetime"),
+    ],
+)
+
+SOURCE_TICKET_EVENTS = SchemaContract(
+    entity="source_ticket_events",
+    source_format="json",
+    source_layer="stream",
+    natural_key=["event_id"],
+    columns=[
+        ColumnContract("event_id", "str", nullable=False, regex=UUID_REGEX),
+        ColumnContract("ticket_id", "str", nullable=False, regex=UUID_REGEX),
+        ColumnContract("agent_id", "int", nullable=False),
+        ColumnContract("event_ts", "datetime", nullable=False),
+        ColumnContract("old_status", "str", allowed_values={"Open", "InProgress", "Resolved", "Closed", "Reopened"}),
+        ColumnContract("new_status", "str", allowed_values={"Open", "InProgress", "Resolved", "Closed", "Reopened"}),
+        ColumnContract("notes", "str"),
+    ],
+)
+
 REGISTRY: dict[str, SchemaContract] = {
-    # Lookup tables
+    # Source (Raw) tables
+    "source_customers": SOURCE_CUSTOMERS,
+    "source_drivers": SOURCE_DRIVERS,
+    "source_restaurants": SOURCE_RESTAURANTS,
+    "source_agents": SOURCE_AGENTS,
+    "source_cities": SOURCE_CITIES,
+    "source_regions": SOURCE_REGIONS,
+    "source_segments": SOURCE_SEGMENTS,
+    "source_categories": SOURCE_CATEGORIES,
+    "source_teams": SOURCE_TEAMS,
+    "source_reason_categories": SOURCE_REASON_CATEGORIES,
+    "source_reasons": SOURCE_REASONS,
+    "source_channels": SOURCE_CHANNELS,
+    "source_priorities": SOURCE_PRIORITIES,
+    "source_orders": SOURCE_ORDERS,
+    "source_tickets": SOURCE_TICKETS,
+    "source_ticket_events": SOURCE_TICKET_EVENTS,
+    # Warehouse (Target) tables
+    "customers": CUSTOMERS,
+    "restaurants": RESTAURANTS,
+    "drivers": DRIVERS,
+    "agents": AGENTS,
     "date_dim": DATE_DIM,
     "cities": CITIES,
     "regions": REGIONS,
@@ -499,12 +782,6 @@ REGISTRY: dict[str, SchemaContract] = {
     "reasons": REASONS,
     "channels": CHANNELS,
     "priorities": PRIORITIES,
-    # Entity tables
-    "customers": CUSTOMERS,
-    "restaurants": RESTAURANTS,
-    "drivers": DRIVERS,
-    "agents": AGENTS,
-    # Stream transactions
     "orders": ORDERS,
     "tickets": TICKETS,
     "ticket_events": TICKET_EVENTS,
