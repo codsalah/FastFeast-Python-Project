@@ -21,7 +21,7 @@ from email.mime.text import MIMEText
 from datetime import datetime
 
 from config.settings import get_settings
-from pipeline.logging.logger import get_logger_name, log_alert_fired
+from utils.logger import get_logger_name, log_alert_fired
 
 logger = get_logger_name("alerting")
 

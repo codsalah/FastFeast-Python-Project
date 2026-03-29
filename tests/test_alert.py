@@ -10,8 +10,8 @@ Requirements:
     .env must have SMTP credentials filled in.
 """
 import time
-from pipeline.alerting import send_alert
-from pipeline.logging.logger import configure_logging
+from alerting.alert_service import send_alert
+from utils.logger import configure_logging
 configure_logging(log_dir="logs", level="INFO")
 
 send_alert(

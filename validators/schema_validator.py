@@ -16,7 +16,7 @@ import pandas as pd
 import numpy as np
 from typing import List, Dict, Any, Optional
 from dataclasses import dataclass
-from .schema_registery import SchemaContract, ColumnContract
+from .schema_registry import SchemaContract, ColumnContract
 
 @dataclass
 class ValidationError:
@@ -166,7 +166,7 @@ class SchemaValidator:
 
 def validate_entity(df: pd.DataFrame, entity_name: str) -> List[ValidationError]:
     """Helper function to validate a specific entity."""
-    from .schema_registery import get_contract
+    from .schema_registry import get_contract
     contract = get_contract(entity_name)
     validator = SchemaValidator(contract)
     return validator.validate(df)
