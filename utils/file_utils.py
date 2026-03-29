@@ -21,6 +21,7 @@ import json
 import os
 import shutil
 import tempfile
+import time
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Iterator, List, Optional
@@ -54,6 +55,27 @@ def compute_record_sha256(record: dict) -> str:
     """
     canonical = json.dumps(record, sort_keys=True, default=str)
     return hashlib.sha256(canonical.encode()).hexdigest()
+
+
+# File stability check
+
+def is_file_stable(filepath: str, wait_sec: int = 1, max_attempts: int = 5) -> bool:
+    """Check if file is done being written by comparing size over multiple attempts."""
+    try:
+        previous_size = -1
+        current_size = os.path.getsize(filepath)
+        
+        for attempt in range(max_attempts):
+            if previous_size == current_size and attempt > 0:
+                return True
+            previous_size = current_size
+            time.sleep(wait_sec)
+            current_size = os.path.getsize(filepath)
+        
+        # After max attempts, if size changed, assume still writing
+        return previous_size == current_size
+    except OSError:
+        return False
 
 
 # Atomic writes
