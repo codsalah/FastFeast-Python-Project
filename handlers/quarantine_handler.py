@@ -1,50 +1,56 @@
 import json
-from datetime import datetime, timezone
-from warehouse.connection import get_cursor, execute_values
 import logging
-logger = logging.getLogger(__name__)
+import psycopg2.extras
+
+from warehouse.connection import get_cursor
+from utils.retry import db_retry
+from utils.logger import get_logger_name
+
+logger = get_logger_name(__name__)
 
 
+@db_retry
 def send_to_quarantine(
-    conn,
-    source_file,
-    entity_type,
-    raw_record,
-    error_type,
-    error_details,
-    orphan_type=None,
-    raw_orphan_id=None,
-    pipeline_run_id=None
-):
-
-    sql = """INSERT INTO fastfeast.quarantine (source_file, entity_type, raw_record, error_type, error_details,
-                                               orphan_type, raw_orphan_id, pipeline_run_id, quarantined_at)
-             VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s)"""
-        
-
-    raw_record_json = json.dumps(raw_record, default=str) #Convert the raw_record dict → JSON string
-    now = datetime.now(timezone.utc)
+    source_file: str,
+    entity_type: str,
+    raw_record: dict,
+    error_type: str,
+    error_details: str,
+    orphan_type: str = None,
+    raw_orphan_id: str = None,
+    pipeline_run_id: int = None,
+) -> bool:
+    """
+    Insert a single record into pipeline_audit.quarantine.
+    Returns True on success, False on failure.
+    """
+    sql = """
+        INSERT INTO pipeline_audit.quarantine
+            (source_file, entity_type, raw_record, error_type, error_details,
+             orphan_type, raw_orphan_id, pipeline_run_id)
+        VALUES (%s, %s, %s::jsonb, %s, %s, %s, %s, %s)
+    """
 
     safe_orphan_id = str(raw_orphan_id) if raw_orphan_id is not None else None
-
 
     try:
         with get_cursor() as cur:
             cur.execute(sql, (
                 source_file,
                 entity_type,
-                raw_record_json,
+                json.dumps(raw_record, default=str),
                 error_type,
                 error_details,
                 orphan_type,
                 safe_orphan_id,
                 pipeline_run_id,
-                now
             ))
- 
+
         logger.debug(
-            f"[QUARANTINE] 1 record saved | "
-            f"entity={entity_type} | error_type={error_type} | file={source_file}"
+            "quarantine_record_saved",
+            entity=entity_type,
+            error_type=error_type,
+            file=source_file,
         )
         return True
 
@@ -52,20 +58,32 @@ def send_to_quarantine(
         # get_cursor() already rolled back when the exception propagated out.
         # We catch it here only to log it and return False instead of crashing.
         logger.error(
-            f"[QUARANTINE] Failed to save record: {e} | "
-            f"entity={entity_type} | file={source_file}"
+            "quarantine_record_failed",
+            entity=entity_type,
+            file=source_file,
+            error=str(e),
         )
         return False
-    
-def send_batch_to_quarantine(conn, failed_records):
 
-    sql = """INSERT INTO fastfeast.quarantine (source_file, entity_type, raw_record, error_type, error_details,
-                                               orphan_type, raw_orphan_id, pipeline_run_id, quarantined_at)
-             VALUES %s"""
-    now = datetime.now(timezone.utc)
 
-    rows=[]
+@db_retry
+def send_batch_to_quarantine(failed_records: list[dict]) -> int:
+    """
+    Bulk insert records into pipeline_audit.quarantine.
+    Falls back to one-by-one on batch failure so partial saves are preserved.
+    Returns count of successfully saved records.
+    """
+    if not failed_records:
+        return 0
 
+    sql = """
+        INSERT INTO pipeline_audit.quarantine
+            (source_file, entity_type, raw_record, error_type, error_details,
+             orphan_type, raw_orphan_id, pipeline_run_id)
+        VALUES %s
+    """
+
+    rows = []
     for rec in failed_records:
         raw_orphan_id = rec.get("raw_orphan_id")
         rows.append((
@@ -77,20 +95,24 @@ def send_batch_to_quarantine(conn, failed_records):
             rec.get("orphan_type",    None),
             str(raw_orphan_id) if raw_orphan_id is not None else None,
             rec.get("pipeline_run_id", None),
-            now
-            # All records share the same timestamp 
         ))
-        
-    try:
-    
-        count = execute_values(sql, rows)  # execute_values() from connection.py → sends ONE multi-row INSERT
 
-        logger.info(f"[QUARANTINE] Batch complete — {count} records quarantined.")
+    try:
+        with get_cursor() as cur:
+            psycopg2.extras.execute_values(
+                cur,
+                sql,
+                rows,
+                template="(%s, %s, %s::jsonb, %s, %s, %s, %s, %s)",
+            )
+            count = cur.rowcount
+
+        logger.info("quarantine_batch_saved", count=count)
         return count
 
     except Exception as e:
         # We catch here to run the fallback instead of crashing.
-        logger.error(f"[QUARANTINE] Batch insert failed: {e}. Starting fallback...")
+        logger.error("quarantine_batch_failed", error=str(e), fallback=True)
 
         # ---> ONE-BY-ONE FALLBACK <---
         # execute_values() is all-or-nothing [atomicity]: one bad row fails the entire batch.
@@ -98,10 +120,10 @@ def send_batch_to_quarantine(conn, failed_records):
 
         # Without fallback: 0 / 50 saved.
         # With fallback:   49 / 50 saved. 
+
         saved = 0
         for rec in failed_records:
             success = send_to_quarantine(
-                conn,
                 source_file=rec.get("source_file",    "unknown"),
                 entity_type=rec.get("entity_type",    "unknown"),
                 raw_record=rec.get("raw_record",       {}),
@@ -113,8 +135,10 @@ def send_batch_to_quarantine(conn, failed_records):
             )
             if success:
                 saved += 1
- 
+
         logger.info(
-            f"[QUARANTINE] Fallback complete — {saved}/{len(failed_records)} records saved."
+            "quarantine_fallback_complete",
+            saved=saved,
+            total=len(failed_records),
         )
         return saved

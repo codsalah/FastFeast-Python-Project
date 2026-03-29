@@ -10,7 +10,7 @@ import signal
 from datetime import datetime
 from pathlib import Path
 
-sys.path.insert(0, str(Path(__file__).parent))
+sys.path.insert(0, str(Path(__file__).parent.parent))
 
 import pipelines.stream_pipeline as watcher_module
 from pipelines.stream_pipeline import BatchPoller, StreamPoller
@@ -19,8 +19,9 @@ from config.settings import get_settings
 from utils.logger import configure_logging
 from quality import metrics_tracker as audit_trail
 import alerting.alert_service as alerting
-BATCH_DIR = "scripts/data/input/batch"
-STREAM_DIR = "scripts/data/input/stream"
+
+BATCH_DIR = "data/input/batch"
+STREAM_DIR = "data/input/stream"
 BATCH_POLL_INTERVAL = 10
 STREAM_POLL_INTERVAL = 5
 
@@ -84,7 +85,7 @@ def shutdown_handler(batch_poller, stream_poller, processor, run_id):
 def main():
     settings = get_settings()
     init_pool(settings)
-    audit_trail.ensure_warehouse_schema()
+    audit_trail.ensure_audit_schema()
 
     run_id = audit_trail.start_run("watcher_test")
     processor = TestProcessor(run_id=run_id)
