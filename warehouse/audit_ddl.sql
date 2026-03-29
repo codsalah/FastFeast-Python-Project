@@ -92,3 +92,8 @@ CREATE TABLE IF NOT EXISTS quarantine (
     pipeline_run_id integer REFERENCES pipeline_run_log(run_id),
     quarantined_at  timestamp NOT NULL DEFAULT now()
 );
+
+CREATE INDEX IF NOT EXISTS idx_file_tracker_run_id      ON pipeline_audit.file_tracker(pipeline_run_id);
+CREATE INDEX IF NOT EXISTS idx_quarantine_run_id         ON pipeline_audit.quarantine(pipeline_run_id);
+CREATE INDEX IF NOT EXISTS idx_orphan_tracking_order_id  ON pipeline_audit.orphan_tracking(order_id, orphan_type);
+CREATE INDEX IF NOT EXISTS idx_quality_metrics_run_id    ON pipeline_audit.pipeline_quality_metrics(run_id);
