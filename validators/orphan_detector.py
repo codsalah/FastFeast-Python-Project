@@ -1,7 +1,7 @@
 from datetime import datetime, timezone
 import logging
 logger = logging.getLogger(__name__)
-from utils.db import get_cursor, execute_many
+from warehouse.connection import get_cursor, execute_many
 
 
 def load_dimension_ids(conn):

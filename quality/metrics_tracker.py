@@ -27,9 +27,9 @@ from typing import Optional
 
 import psycopg2.extras
 
-from pipeline.utils.db import get_conn, get_cursor, get_dict_cursor
-from pipeline.utils.retry import db_retry
-from pipeline.logging.logger import get_logger_name
+from warehouse.connection import get_conn, get_cursor, get_dict_cursor
+from utils.retry import db_retry
+from utils.logger import get_logger_name
 
 logger = get_logger_name(__name__)
 
@@ -118,7 +118,7 @@ def complete_run(
 
 # ── File tracker wrappers (delegate to file_tracker.py) ──────────────────────
 
-from pipeline.file_tracker import (
+from utils.file_tracker import (
     compute_file_hash,
     is_file_processed as _is_file_processed,
     register_file as _register_file,

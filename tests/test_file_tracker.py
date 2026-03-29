@@ -10,9 +10,9 @@ from pathlib import Path
 import sys
 sys.path.insert(0, str(Path(__file__).parent))
 
-from pipeline.file_tracker import compute_file_hash, register_file, mark_file_success, is_file_processed
-from pipeline.logging import audit_trail
-from pipeline.utils.db import init_pool
+from utils.file_tracker import compute_file_hash, register_file, mark_file_success, is_file_processed
+from quality import metrics_tracker as audit_trail
+from warehouse.connection import init_pool
 from config.settings import get_settings
 
 
