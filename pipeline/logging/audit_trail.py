@@ -1,331 +1,83 @@
 """
-WAP (Write --> Audit --> Print)
-Tables owned (all live in the audit schema (audit.*))
-- audit.pipeline_run_log
-- audit.file_tracking
-- audit.quarantine
-- audit.orphan_staging
-- audit.pipeline_quality_metrics
-- audit.column_quality_metrics
+pipeline/logging/audit_trail.py
+────────────────────────────────
+Python write layer for the warehouse schema.
+Tables defined in warehouse/dwh_ddl.sql:
+    - warehouse.pipeline_run_log
+    - warehouse.file_tracker (handled by file_tracker.py)
+    - warehouse.quarantine
+    - warehouse.orphan_tracking
+    - warehouse.pipeline_quality_metrics
 
 Decisions taken:
-- run_id is an int (serial), NOT a UUID — pipeline_run_log owns the sequence.
-- file tracking pk is file_path (varchar) - idempotency key is file_path alone.
-    - rerun the same file path replace the row via (ON CONFLICT DO UPDATE)
-- quarantine.record_data is text not jsonb - matches the schema definition.
-- orphan_staging has no run_id fk - orphans arrive and resolve async across runs.   
-- all writes use @db_retry decorator for transient pg connection failures.
-- all 6 tables lives under audit schema. (audit.*) 
-    - completely separate from the dwh schema.
-    - the audit db can be queried independently of the dwh.
+    - run_id is an int (serial) — pipeline_run_log owns the sequence.
+    - file tracking uses file_path + file_hash composite key (handled by file_tracker.py)
+    - quarantine.raw_record is jsonb
+    - orphan_tracking has no FK to run_log — orphans resolve async across runs.
+    - All writes use @db_retry decorator for transient PG connection failures.
 """
 
 from __future__ import annotations
 
 import json
-import logging
+import os
+from datetime import date
+from pathlib import Path
 from typing import Optional
 
 import psycopg2.extras
 
-from pipeline.utils.db import get_conn, get_cursor, get_dict_cursor, execute_values
+from pipeline.utils.db import get_conn, get_cursor, get_dict_cursor
 from pipeline.utils.retry import db_retry
+from pipeline.logging.logger import get_logger_name
 
-logger = logging.getLogger(__name__)
-############################################# DDL Schema #############################################
+logger = get_logger_name(__name__)
 
-def get_audit_schema() -> str:
-    return """
-    create schema if not exists pipeline_audit;
-    
-    create table if not exists pipeline_audit.pipeline_run_log (
-        run_id            serial      primary key,
-        run_date          timestamptz not null default now(),
-        run_type          varchar     not null,
-        triggered_at      timestamptz not null default now(),
-        started_at        timestamptz,
-        finished_at       timestamptz,
-        status            varchar     not null default 'running',
-        total_files       int         not null default 0,
-        successful_files  int         not null default 0,
-        failed_files      int         not null default 0,
-        total_records     int         not null default 0,
-        total_loaded      int         not null default 0,
-        total_quarantined int         not null default 0,
-        total_orphaned    int         not null default 0,
-        error_message     text
-    );
-    
-    create table if not exists pipeline_audit.file_tracking (
-        file_path           varchar     primary key,
-        file_type           varchar     not null default '',
-        table_name          varchar     not null default '',
-        status              varchar     not null default 'processing',
-        records_found       int         not null default 0,
-        records_loaded      int         not null default 0,
-        records_quarantined int         not null default 0,
-        records_orphaned    int         not null default 0,
-        file_size_bytes     bigint      not null default 0,
-        started_at          timestamptz,
-        finished_at         timestamptz,
-        run_id              int         references pipeline_audit.pipeline_run_log(run_id)
-    );
-    
-    create table if not exists pipeline_audit.quarantine (
-        quarantine_id    serial      primary key,
-        source_file      varchar     not null default '',
-        table_name       varchar     not null default '',
-        record_id        varchar     not null default '',
-        record_data      text        not null,
-        rejection_reason varchar     not null,
-        rejection_field  varchar     not null default '',
-        rejection_value  varchar     not null default '',
-        quarantined_at   timestamptz not null default now(),
-        run_id           int         references pipeline_audit.pipeline_run_log(run_id)
-    );
-    
-    create table if not exists pipeline_audit.orphan_staging (
-        staging_id       serial      primary key,
-        record_type      varchar     not null default '',
-        record_id        varchar     not null default '',
-        record_data      text        not null default '',
-        missing_fk_type  varchar     not null default '',
-        missing_fk_value varchar     not null default '',
-        source_file      varchar     not null default '',
-        arrived_at       timestamptz not null default now(),
-        resolved_at      timestamptz,
-        signup_date      varchar,
-        expiry_date      date,
-        status           varchar     not null default 'pending'
-    );
-    
-    create table if not exists pipeline_audit.pipeline_quality_metrics (
-        metric_id                serial      primary key,
-        run_id                   int         references pipeline_audit.pipeline_run_log(run_id),
-        run_date                 date        not null default current_date,
-        file_path                varchar     not null default '',
-        table_name               varchar     not null default '',
-        total_records            int         not null default 0,
-        valid_records            int         not null default 0,
-        quarantined_records      int         not null default 0,
-        orphaned_records         int         not null default 0,
-        duplicate_count          int         not null default 0,
-        null_violations          int         not null default 0,
-        type_violations          int         not null default 0,
-        business_rule_violations int         not null default 0,
-        orphan_count             int         not null default 0,
-        duplicate_rate           numeric     not null default 0,
-        orphan_rate              numeric     not null default 0,
-        null_rate                numeric     not null default 0,
-        integrity_rate           numeric     not null default 1,
-        processing_latency_sec   numeric     not null default 0,
-        recorded_at              timestamptz not null default now()
-    );
-    
-    create table if not exists pipeline_audit.column_quality_metrics (
-        col_metric_id int         primary key generated always as identity,
-        metric_id     int         references pipeline_audit.pipeline_quality_metrics(metric_id),
-        table_name    varchar     not null default '',
-        column_name   varchar     not null default '',
-        total_values  int         not null default 0,
-        null_count    int         not null default 0,
-        null_pct      numeric     not null default 0,
-        invalid_count int         not null default 0,
-        invalid_pct   numeric     not null default 0,
-        run_date      date        not null default current_date
-    );
-    
-    create index if not exists idx_file_tracking_run_id   on pipeline_audit.file_tracking (run_id);
-    create index if not exists idx_quarantine_run_id       on pipeline_audit.quarantine (run_id);
-    create index if not exists idx_quality_metrics_run_id  on pipeline_audit.pipeline_quality_metrics (run_id);
-    create index if not exists idx_orphan_staging_status   on pipeline_audit.orphan_staging (status, expiry_date);
+_DDL_PATH = Path(__file__).resolve().parents[2] / "warehouse" / "dwh_ddl.sql"
 
-    """
 
-def ensure_audit_schema() -> None:
-    """ Ensure the audit schema is created """
+def ensure_warehouse_schema() -> None:
+    """Create warehouse schema and tables if they don't exist."""
+    if not _DDL_PATH.exists():
+        raise FileNotFoundError(f"DDL not found at {_DDL_PATH}")
+    ddl = _DDL_PATH.read_text(encoding="utf-8")
     with get_conn() as conn:
-        with conn.cursor() as cursor:
-            cursor.execute(get_audit_schema())
-    logger.info("Audit Schema is ready....")
+        with conn.cursor() as cur:
+            cur.execute(ddl)
+    logger.info("warehouse_schema_ready", ddl_path=str(_DDL_PATH))
 
 
+# ── Run lifecycle ─────────────────────────────────────────────────────────────
 
-########################################### Writing Phase #############################################
 @db_retry
 def start_run(run_type: str) -> int:
     """
-    Insert a pipeline_run_log row and return the generated run_id (int).
-    
+    Open a new pipeline run and return its auto-generated run_id.
+
     Args:
-        run_type (str): The type of the run (e.g. 'batch', 'micro_batch')
+        run_type: 'batch' or 'micro_batch' or 'watcher_test'
 
     Returns:
-        The auto-generated run_id integer.
+        Integer run_id from pipeline_run_log.
     """
     with get_conn() as conn:
-        with conn.cursor() as cursor:
-            cursor.execute("""
-            insert into pipeline_audit.pipeline_run_log 
-                (run_date, run_type, triggered_at, started_at, status)
-            values (now(), %s, now(), now(), 'running')
-            returning run_id
+        with conn.cursor() as cur:
+            cur.execute("""
+                insert into warehouse.pipeline_run_log
+                    (run_type, run_date, started_at, status)
+                values (%s, current_date, now(), 'running')
+                returning run_id
             """, (run_type,))
-            run_id = cursor.fetchone()[0] # this is the auto-gen run_id
+            run_id = cur.fetchone()[0]
 
-    logger.info(f"Run started with run_id: {run_id}")
+    logger.info("run_started", run_id=run_id, run_type=run_type)
     return run_id
-
-
-@db_retry
-def register_file(
-    run_id: int, 
-    file_path: str, 
-    file_type: str, 
-    table_name: str, 
-    file_size_bytes: int = 0 ) -> None:
-    """
-    Register a file in file_tracking table with status 'processing'.
-        - this uses (ON CONFLICT UPDATE) to handle duplicate of the same file
-        - on a retry run resets it cleanly instead of failing
-
-    Args:
-        run_id:          Generated by start_run().
-        file_path:       Source file path — this is the PK.
-        file_type:       'csv' or 'json'.
-        table_name:      Target warehouse table, e.g. 'fact_orders'.
-        file_size_bytes: File size for reporting.
-    """
-    with get_cursor() as cur:
-        cur.execute("""
-            insert into pipeline_audit.file_tracking
-                (file_path, file_type, table_name, status, file_size_bytes, started_at, run_id)
-            values (%s, %s, %s, 'processing', %s, now(), %s)
-            on conflict (file_path) do update
-                set
-                    status = 'processing',
-                    file_size_bytes = %s,
-                    started_at = now(),
-                    run_id = %s
-            """,
-            (file_path, file_type, table_name, file_size_bytes, run_id, file_size_bytes, run_id))
-
-    logger.debug(
-        "file_registered",
-        extra={"run_id": run_id, "file": file_path, "table": table_name},
-    )
-
-
-########################################### Auditing phase  ###########################################
-
-## Idempotency check
-@db_retry
-def is_file_processed(file_path: str) -> bool:
-    """ 
-    Return True if the file is already has status='success' in file_tracking table
-    - this is called before register_file() to prevent processing the same file multiple times
-        - if True, skip the file and call log_file_skipped() to log the skipped file
-    
-    Returns:
-        True  → already loaded successfully, skip.
-        False → new or previously failed, process.
-    """
-    with get_dict_cursor() as cur:
-        cur.execute(
-            """
-            select 1 from pipeline_audit.file_tracking
-            where file_path = %s and status = 'success'
-            limit 1
-            """,
-            (file_path,)
-        )
-        row = cur.fetchone()
-        already_done = row is not None
-        if already_done:
-            logger.info(
-                "file_already_processed",
-                extra={"file": file_path},
-            )
-        return already_done
-
-
-## File outcome writer
-@db_retry
-def mark_file_success(
-        file_path: str,
-        records_found: int,
-        records_loaded: int,
-        records_quarantined: int,
-        records_orphaned: int,
-    ) -> None:
-
-    """
-    Mark a file_tracking row as successfully processed
-    - call this only after the warehouse upsert committed.
-
-    Args:
-        file_path: source file path (PK)
-        records_found: total records found in the file
-        records_loaded: total records loaded into the warehouse
-        records_quarantined: total records quarantined
-        records_orphaned: total records orphaned
-    """
-    with get_cursor() as cur:
-        cur.execute("""
-            update pipeline_audit.file_tracking
-            set
-                status = 'success',
-                records_found = %s,
-                records_loaded = %s,
-                records_quarantined = %s,
-                records_orphaned = %s,
-                finished_at = now()
-            where file_path = %s
-        """,
-        (records_found, records_loaded, records_quarantined, records_orphaned, file_path))
-    logger.info(
-        "file_success",
-        extra={
-            "file": file_path,
-            "records_found": records_found,
-            "records_loaded": records_loaded,
-            "records_quarantined": records_quarantined,
-            "records_orphaned": records_orphaned,
-        },
-    )
-
-@db_retry
-def mark_file_failed(file_path: str, error_message: str) -> None:
-    """
-    Mark a file_tracking row as failed
-    - call this only after the warehouse upsert failed.
-
-    Args:
-        file_path: source file path (PK)
-        error_message: error message
-    """
-    with get_cursor() as cur:
-        cur.execute("""
-            update pipeline_audit.file_tracking
-            set
-                status = 'failed',
-                finished_at = now()
-            where file_path = %s
-        """,
-        (file_path,))
-    logger.info(
-        "file_failed",
-        extra={
-            "file": file_path,
-            "error_message": error_message,
-        },
-    )
 
 
 @db_retry
 def complete_run(
     run_id: int,
-    status: str,
+    status: str,                    # 'success' | 'failed'
     total_files: int,
     successful_files: int,
     failed_files: int,
@@ -333,89 +85,377 @@ def complete_run(
     total_loaded: int,
     total_quarantined: int,
     total_orphaned: int,
-    error_message: Optional[str] = None
+    error_message: Optional[str] = None,
 ) -> None:
     """
-    Finalize the pipeline_run_log entry with aggregate statistics.
+    Finalise the pipeline_run_log row with aggregate statistics.
+    Call at the very end of every run, success or failure.
     """
     with get_cursor() as cur:
         cur.execute("""
-            UPDATE pipeline_audit.pipeline_run_log
-            SET 
-                status = %s,
-                finished_at = now(),
-                total_files = %s,
-                successful_files = %s,
-                failed_files = %s,
-                total_records = %s,
-                total_loaded = %s,
+            update warehouse.pipeline_run_log
+            set
+                status            = %s,
+                completed_at      = now(),
+                total_files       = %s,
+                successful_files  = %s,
+                failed_files      = %s,
+                total_records     = %s,
+                total_loaded      = %s,
                 total_quarantined = %s,
-                total_orphaned = %s,
-                error_message = %s
-            WHERE run_id = %s
+                total_orphaned    = %s,
+                error_message     = %s
+            where run_id = %s
         """, (
-            status, total_files, successful_files, failed_files,
+            status,
+            total_files, successful_files, failed_files,
             total_records, total_loaded, total_quarantined, total_orphaned,
-            error_message, run_id
+            error_message,
+            run_id,
         ))
-    logger.info(f"Run {run_id} completed with status: {status}")
+    logger.info("run_completed", run_id=run_id, status=status)
 
+
+# ── File tracker wrappers (delegate to file_tracker.py) ──────────────────────
+
+from pipeline.file_tracker import (
+    compute_file_hash,
+    is_file_processed as _is_file_processed,
+    register_file as _register_file,
+    mark_file_success as _mark_file_success,
+    mark_file_failed as _mark_file_failed,
+)
+
+def is_file_processed(file_path: str) -> bool:
+    """
+    Check if a file was already successfully processed.
+    Returns True if the exact file (path + hash) was already processed.
+    Returns False for non-existent files (they can't be processed yet).
+    """
+    # If file doesn't exist, it can't be processed
+    if not os.path.exists(file_path):
+        return False
+    
+    try:
+        file_hash = compute_file_hash(file_path)
+        return _is_file_processed(file_path, file_hash)
+    except Exception as e:
+        logger.warning("is_file_processed_failed", file=file_path, error=str(e))
+        return False
+
+
+def register_file(
+    pipeline_run_id: int,
+    file_path: str,
+    file_type: str,
+) -> None:
+    """
+    Register a file as being processed.
+    Computes hash automatically.
+    """
+    file_hash = compute_file_hash(file_path)
+    _register_file(
+        run_id=pipeline_run_id,
+        file_path=file_path,
+        file_hash=file_hash,
+        file_type=file_type,
+    )
+
+
+def mark_file_success(
+    file_path: str,
+    records_total: int,
+    records_loaded: int,
+    records_quarantined: int,
+) -> None:
+    """
+    Mark a file as successfully processed.
+    """
+    file_hash = compute_file_hash(file_path)
+    _mark_file_success(
+        file_path=file_path,
+        file_hash=file_hash,
+        records_total=records_total,
+        records_loaded=records_loaded,
+        records_quarantined=records_quarantined,
+    )
+
+
+def mark_file_failed(file_path: str, error_message: str) -> None:
+    """
+    Mark a file as failed.
+    """
+    file_hash = compute_file_hash(file_path)
+    _mark_file_failed(file_path, file_hash, error_message)
+
+
+# ── Quarantine ────────────────────────────────────────────────────────────────
 
 @db_retry
 def write_quarantine_batch(
     records: list[dict],
     source_file: str,
-    table_name: str,
-    reason: str,
-    field: str,
-    run_id: int
+    entity_type: str,
+    error_type: str,
+    pipeline_run_id: int,
+    error_details: str = None,
+    orphan_type: str = None,
+    raw_orphan_id: str = None,
 ) -> None:
     """
-    Bulk move bad data into the quarantine table.
-    We dump the ENTIRE record as JSON so developers can see the raw bad data.
+    Bulk-insert bad records into the quarantine table.
+
+    raw_record is stored as jsonb for structured querying.
     """
     if not records:
         return
 
-    prepared_rows = []
-    for rec in records:
-        # Try to find a meaningful record_id, fallback to 'unknown'
-        record_id = str(rec.get('order_id', rec.get('customer_id', rec.get('ticket_id', rec.get('id', 'unknown')))))
-        
-        # Get the actual value that caused the rejection if possible
-        rejection_value = str(rec.get(field, 'null'))
+    rows = [
+        (
+            source_file,
+            entity_type,
+            json.dumps(rec, default=str),
+            error_type,
+            error_details or "",
+            orphan_type,
+            raw_orphan_id,
+            pipeline_run_id,
+        )
+        for rec in records
+    ]
 
-        prepared_rows.append({
-            "source_file": source_file,
-            "table_name": table_name,
-            "record_id": record_id,
-            "record_data": json.dumps(rec), 
-            "rejection_reason": reason,
-            "rejection_field": field,
-            "rejection_value": rejection_value,
-            "run_id": run_id,
-            "quarantined_at": "now()" # Database will use default, but execute_values needs keys to match
-        })
+    with get_cursor() as cur:
+        psycopg2.extras.execute_values(
+            cur,
+            """
+            insert into warehouse.quarantine
+                (source_file, entity_type, raw_record,
+                 error_type, error_details,
+                 orphan_type, raw_orphan_id,
+                 pipeline_run_id)
+            values %s
+            """,
+            rows,
+            template="(%s, %s, %s::jsonb, %s, %s, %s, %s, %s)",
+        )
 
-    # Note: execute_values in db.py handles the SQL construction
-    sql = """
-    INSERT INTO pipeline_audit.quarantine 
-    (source_file, table_name, record_id, record_data, rejection_reason, rejection_field, rejection_value, run_id, quarantined_at)
-    VALUES %s
+    logger.warning("quarantine_batch_written",
+                   count=len(records),
+                   source_file=source_file,
+                   entity_type=entity_type,
+                   error_type=error_type)
+
+
+# ── Orphan tracking ───────────────────────────────────────────────────────────
+
+@db_retry
+def write_orphan_batch(
+    records: list[dict],
+    orphan_type: str,       # 'customer' | 'driver' | 'restaurant' | 'agent'
+    fk_field: str,          # column name holding the missing FK value
+) -> None:
     """
-    
-    # We need to manually match columns for execute_values
-    # Or just use the tool since it extracts keys from the first record.
-    # But wait, execute_values in db.py uses the dict keys.
-    # Our table has quarantined_at with default, but if we pass it in values it must be there.
-    
-    execute_values(sql, prepared_rows)
-    logger.warning(f"Quarantined {len(records)} records from {source_file} (Reason: {reason})")
+    Bulk-insert unresolved FK references into orphan_tracking.
+    """
+    if not records:
+        return
 
-# TODO: # Orphan phase (write_orphan_batch function)
-# TODO: # Quality metrics phase 
-    # TODO: # (write_quality_metrics function
-    # TODO: # write_column_quality_metrics function)
-# TODO: # Complete summary phase 
-    # TODO: # (get_run_summary function)
-    # TODO: # get_quality_metrics_for_run function
+    rows = []
+    for rec in records:
+        order_id = str(rec.get('order_id', rec.get('ticket_id', 'unknown')))
+        raw_id = rec.get(fk_field)
+        if raw_id is not None:
+            rows.append((order_id, orphan_type, int(raw_id)))
+
+    if not rows:
+        return
+
+    with get_cursor() as cur:
+        psycopg2.extras.execute_values(
+            cur,
+            """
+            insert into warehouse.orphan_tracking
+                (order_id, orphan_type, raw_id,
+                 is_resolved, retry_count, detected_at)
+            values %s
+            """,
+            [(r[0], r[1], r[2], False, 0) for r in rows],
+            template="(%s, %s, %s, %s, %s, now())",
+        )
+
+    logger.warning("orphan_batch_tracked",
+                   count=len(records),
+                   orphan_type=orphan_type)
+
+
+@db_retry
+def mark_orphan_resolved(order_id: str, orphan_type: str) -> None:
+    """
+    Flip is_resolved=true and stamp resolved_at.
+    """
+    with get_cursor() as cur:
+        cur.execute("""
+            update warehouse.orphan_tracking
+            set is_resolved = true,
+                resolved_at = now()
+            where order_id    = %s
+              and orphan_type = %s
+              and is_resolved = false
+        """, (order_id, orphan_type))
+
+    logger.info("orphan_resolved", order_id=order_id, orphan_type=orphan_type)
+
+
+@db_retry
+def increment_orphan_retry(order_id: str, orphan_type: str) -> None:
+    """
+    Increment retry_count for an orphan that was attempted but still unresolved.
+    """
+    with get_cursor() as cur:
+        cur.execute("""
+            update warehouse.orphan_tracking
+            set retry_count = retry_count + 1
+            where order_id    = %s
+              and orphan_type = %s
+              and is_resolved = false
+        """, (order_id, orphan_type))
+
+
+# ── Quality metrics ───────────────────────────────────────────────────────────
+
+@db_retry
+def write_quality_metrics(
+    run_id: int,
+    table_name: str,
+    source_file: str,
+    total_records: int,
+    valid_records: int,
+    quarantined_records: int,
+    orphaned_records: int,
+    duplicate_count: int,
+    null_violations: int,
+    processing_latency_sec: float,
+    quality_details: dict = None,
+) -> None:
+    """
+    Insert one quality-metrics row per processed file.
+    """
+    safe_total = total_records if total_records > 0 else 1
+
+    duplicate_rate  = round(duplicate_count      / safe_total, 4)
+    orphan_rate     = round(orphaned_records      / safe_total, 4)
+    null_rate       = round(null_violations       / safe_total, 4)
+    quarantine_rate = round(quarantined_records   / safe_total, 4)
+
+    details_json = json.dumps(quality_details) if quality_details else None
+
+    with get_cursor() as cur:
+        cur.execute("""
+            insert into warehouse.pipeline_quality_metrics
+                (run_id, run_date, table_name, source_file,
+                 total_records, valid_records,
+                 quarantined_records, orphaned_records,
+                 duplicate_count, null_violations,
+                 duplicate_rate, orphan_rate, null_rate, quarantine_rate,
+                 processing_latency_sec, quality_details)
+            values
+                (%s, current_date, %s, %s,
+                 %s, %s,
+                 %s, %s,
+                 %s, %s,
+                 %s, %s, %s, %s,
+                 %s, %s::jsonb)
+        """, (
+            run_id, table_name, source_file,
+            total_records, valid_records,
+            quarantined_records, orphaned_records,
+            duplicate_count, null_violations,
+            duplicate_rate, orphan_rate, null_rate, quarantine_rate,
+            processing_latency_sec,
+            details_json,
+        ))
+
+    logger.info("quality_metrics_written",
+                run_id=run_id,
+                table=table_name,
+                file=source_file,
+                total=total_records,
+                valid=valid_records,
+                quarantine_rate=quarantine_rate)
+
+
+# ── Read / summary ────────────────────────────────────────────────────────────
+
+@db_retry
+def get_run_summary(run_id: int) -> dict:
+    """
+    Return aggregate statistics for a completed run.
+    """
+    with get_dict_cursor() as cur:
+        cur.execute("""
+            select
+                run_id,
+                run_type,
+                run_date,
+                status,
+                started_at,
+                completed_at,
+                total_files,
+                successful_files,
+                failed_files,
+                total_records,
+                total_loaded,
+                total_quarantined,
+                total_orphaned,
+                error_message,
+                case
+                    when total_files > 0
+                    then round(successful_files::numeric / total_files, 4)
+                    else 0
+                end as file_success_rate,
+                extract(epoch from (completed_at - started_at)) as run_duration_sec
+            from warehouse.pipeline_run_log
+            where run_id = %s
+        """, (run_id,))
+        row = cur.fetchone()
+
+    if row is None:
+        logger.warning("get_run_summary_not_found", run_id=run_id)
+        return {}
+
+    return dict(row)
+
+
+@db_retry
+def get_quality_metrics_for_run(run_id: int) -> list[dict]:
+    """
+    Return all per-file quality metric rows for a given run.
+    """
+    with get_dict_cursor() as cur:
+        cur.execute("""
+            select
+                metric_id,
+                table_name,
+                source_file,
+                total_records,
+                valid_records,
+                quarantined_records,
+                orphaned_records,
+                duplicate_count,
+                null_violations,
+                duplicate_rate,
+                orphan_rate,
+                null_rate,
+                quarantine_rate,
+                processing_latency_sec,
+                quality_details,
+                recorded_at
+            from warehouse.pipeline_quality_metrics
+            where run_id = %s
+            order by source_file
+        """, (run_id,))
+        rows = cur.fetchall()
+
+    result = [dict(r) for r in rows]
+    logger.debug("quality_metrics_fetched", run_id=run_id, count=len(result))
+    return result

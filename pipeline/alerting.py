@@ -18,7 +18,6 @@ Trigger conditions
 import smtplib
 import threading
 from email.mime.text import MIMEText
-from email.mime.multipart import MIMEMultipart
 from datetime import datetime
 
 from config.settings import get_settings
@@ -40,18 +39,29 @@ def send_alert(error_type: str, message: str, run_id: int = None) -> None:
         return
 
     thread = threading.Thread(
-        target=_send_email,
-        args=(error_type, message, run_id, settings),
-        daemon=True
+        target = _send_email,
+        args   = (error_type, message, run_id),
+        daemon = True
     )
     thread.start()
 
-
-def _send_email(error_type: str, message: str, run_id, settings) -> None:
+def _send_email(error_type: str, message: str, run_id) -> None:
     """
     Internal — runs inside background thread.
-    If this fails, it logs silently. Never crashes the pipeline.
+    Always logs the alert event first.
+    Then attempts email — failure is silent and never crashes the pipeline.
     """
+    settings = get_settings()  
+
+    log_alert_fired(
+        logger,
+        alert_type = error_type,
+        severity   = "CRITICAL",
+        message    = message,
+        run_id     = run_id or "N/A",
+    )
+
+    # Then attempt email separately
     try:
         subject = (
             f"[FastFeast ALERT] {error_type} — "
@@ -71,11 +81,10 @@ Details:
 -- FastFeast Pipeline
         """.strip()
 
-        msg = MIMEMultipart()
+        msg            = MIMEText(body, "plain")
         msg["Subject"] = subject
-        msg["From"] = f"{settings.alert.sender_name} <{settings.alert.smtp_user}>"
+        msg["From"]    = f"{settings.alert.sender_name} <{settings.alert.smtp_user}>"
         msg["To"]      = ", ".join(settings.alert.alert_recipients)
-        msg.attach(MIMEText(body, "plain"))
 
         with smtplib.SMTP(settings.alert.smtp_host, settings.alert.smtp_port) as server:
             server.starttls()
@@ -86,8 +95,6 @@ Details:
                 msg.as_string()
             )
 
-        log_alert_fired(logger, alert_type=error_type, severity="CRITICAL", message=message)
-
     except Exception as e:
-        # CRITICAL: never raise here — just log silently
-        logger.error("alert_send_failed", error=str(e))
+        # Never raise — just log silently
+        logger.error("alert_email_failed", error=str(e))
