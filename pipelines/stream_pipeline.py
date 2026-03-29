@@ -21,13 +21,13 @@ import time
 import threading
 from datetime import date, datetime, timedelta
 
-from pipeline.logging.logger import (
+from utils.logger import (
     get_logger_name,
     log_stage_start,
     log_stage_complete,
     log_alert_fired,
 )
-from pipeline.logging import audit_trail
+from quality import metrics_tracker as audit_trail
 
 logger = get_logger_name(__name__)
 

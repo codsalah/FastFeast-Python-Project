@@ -12,14 +12,13 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).parent))
 
-import pipeline.watcher as watcher_module
-from pipeline.watcher import BatchPoller, StreamPoller
-from pipeline.utils.db import init_pool
+import pipelines.stream_pipeline as watcher_module
+from pipelines.stream_pipeline import BatchPoller, StreamPoller
+from warehouse.connection import init_pool
 from config.settings import get_settings
-from pipeline.logging.logger import configure_logging
-from pipeline.logging import audit_trail
-import pipeline.alerting as alerting
-
+from utils.logger import configure_logging
+from quality import metrics_tracker as audit_trail
+import alerting.alert_service as alerting
 BATCH_DIR = "scripts/data/input/batch"
 STREAM_DIR = "scripts/data/input/stream"
 BATCH_POLL_INTERVAL = 10

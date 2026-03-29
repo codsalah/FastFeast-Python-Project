@@ -1,6 +1,6 @@
 import json
 from datetime import datetime, timezone
-from utils.db import get_cursor, execute_values
+from warehouse.connection import get_cursor, execute_values
 import logging
 logger = logging.getLogger(__name__)
 
