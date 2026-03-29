@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
 """
 test_file_tracker.py - Core file tracker tests
+run: python tests/test_file_tracker.py
 """
 
 import os
@@ -8,7 +9,7 @@ import tempfile
 from pathlib import Path
 
 import sys
-sys.path.insert(0, str(Path(__file__).parent))
+sys.path.insert(0, str(Path(__file__).parent.parent))
 
 from utils.file_tracker import compute_file_hash, register_file, mark_file_success, is_file_processed
 from quality import metrics_tracker as audit_trail
@@ -24,7 +25,7 @@ def test():
     # Setup
     settings = get_settings()
     init_pool(settings)
-    audit_trail.ensure_warehouse_schema()
+    audit_trail.ensure_audit_schema()
     
     # Create test file
     with tempfile.NamedTemporaryFile(mode='w', suffix='.csv', delete=False) as f:

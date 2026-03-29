@@ -59,7 +59,7 @@ def init_pool(settings: Settings) -> None:
     )
 
     # Register JSONB support for dict objects 
-    # psycopg2.extras.register_json(conn_or_pool=_pool, globally=True)
+#    psycopg2.extras.register_json(conn_or_pool=_pool, globally=True)
 
 
 def close_pool() -> None:

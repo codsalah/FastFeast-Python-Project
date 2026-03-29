@@ -19,6 +19,8 @@ FUTURE CHANGES NEEDED:
 import os
 import time
 import threading
+import sys
+from pathlib import Path
 from datetime import date, datetime, timedelta
 
 from utils.logger import (
@@ -27,6 +29,10 @@ from utils.logger import (
     log_stage_complete,
     log_alert_fired,
 )
+project_root = Path(__file__).resolve().parent.parent
+if str(project_root) not in sys.path:
+    sys.path.insert(0, str(project_root))
+
 from quality import metrics_tracker as audit_trail
 
 logger = get_logger_name(__name__)
@@ -63,23 +69,7 @@ BATCH_WINDOW_END   = 1    # 1AM — past this with files missing → log CRITICA
 
 # ── File stability check ──────────────────────────────────────
 
-def is_file_stable(filepath: str, wait_sec: int = 1, max_attempts: int = 3) -> bool:
-    """Check if file is done being written by comparing size over multiple attempts."""
-    try:
-        previous_size = -1
-        current_size = os.path.getsize(filepath)
-        
-        for attempt in range(max_attempts):
-            if previous_size == current_size and attempt > 0:
-                return True
-            previous_size = current_size
-            time.sleep(wait_sec)
-            current_size = os.path.getsize(filepath)
-        
-        # After max attempts, if size changed, assume still writing
-        return previous_size == current_size
-    except OSError:
-        return False
+from utils.file_utils import is_file_stable
 
 # ── Batch Poller ──────────────────────────────────────────────
 

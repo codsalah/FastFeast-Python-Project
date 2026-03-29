@@ -1,11 +1,15 @@
-from datetime import datetime, timezone
-import logging
-logger = logging.getLogger(__name__)
 from warehouse.connection import get_cursor, execute_many
+from utils.retry import db_retry
+from utils.logger import get_logger_name
+
+logger = get_logger_name(__name__)
 
 
-def load_dimension_ids(conn):
-
+def load_dimension_ids() -> dict:
+    """
+    Load current active natural IDs from warehouse dimension tables.
+    Returns a dict of sets keyed by entity type.
+    """
     dimension_ids = {
         "customer_ids":   set(),
         "driver_ids":     set(),
@@ -13,13 +17,12 @@ def load_dimension_ids(conn):
     }
 
     try:
-        
         with get_cursor() as cur:
 
             # --- Load customer IDs ---
             cur.execute(
                 """ SELECT customer_id
-                    FROM fastfeast.dim_customer
+                    FROM warehouse.dim_customer
                     WHERE customer_id IS NOT NULL
                     AND is_current = true""")
             dimension_ids["customer_ids"] = {row[0] for row in cur.fetchall()}
@@ -27,7 +30,7 @@ def load_dimension_ids(conn):
             # --- Load driver IDs ---
             cur.execute(
                 """SELECT driver_id
-                FROM fastfeast.dim_driver
+                FROM warehouse.dim_driver
                 WHERE driver_id IS NOT NULL
                   AND is_current = true""")
             dimension_ids["driver_ids"] = {row[0] for row in cur.fetchall()}
@@ -35,26 +38,29 @@ def load_dimension_ids(conn):
             # --- Load restaurant IDs ---
             cur.execute(
                 """SELECT restaurant_id
-                   FROM fastfeast.dim_restaurant
+                   FROM warehouse.dim_restaurant
                    WHERE restaurant_id IS NOT NULL
                    AND is_current = true""")
             dimension_ids["restaurant_ids"] = {row[0] for row in cur.fetchall()}
 
         logger.info(
-            f"[ORPHAN DETECTOR] Dimension ID sets loaded — "
-            f"{len(dimension_ids['customer_ids'])} customers | "
-            f"{len(dimension_ids['driver_ids'])} drivers | "
-            f"{len(dimension_ids['restaurant_ids'])} restaurants"
+            "dimension_ids_loaded",
+            customers=len(dimension_ids["customer_ids"]),
+            drivers=len(dimension_ids["driver_ids"]),
+            restaurants=len(dimension_ids["restaurant_ids"]),
         )
 
     except Exception as e:
-        logger.error(f"[ORPHAN DETECTOR] Failed to load dimension IDs: {e}")
+        logger.error("dimension_ids_load_failed", error=str(e))
 
     return dimension_ids
 
- 
 
-def detect_orphans(record, dimension_ids):
+def detect_orphans(record: dict, dimension_ids: dict) -> dict:
+    """
+    Check a record for unresolvable foreign keys.
+    Returns a dict with is_orphan bool and list of orphaned fields.
+    """
     orphaned_fields = []
 
     ## --- CHECK customer_id ---
@@ -66,7 +72,7 @@ def detect_orphans(record, dimension_ids):
                 "raw_id":      customer_id,
                 "orphan_type": "customer"
             })
-            
+
     # --- CHECK driver_id ---
     driver_id = record.get("driver_id")
     if driver_id is not None:
@@ -99,24 +105,33 @@ def detect_orphans(record, dimension_ids):
             f"{o['orphan_type']}={o['raw_id']}"
             for o in orphaned_fields
         )
-    
         logger.warning(
-            f"[ORPHAN DETECTOR] Orphan detected | order_id={order_id} | {summary}"
+            "orphan_detected",
+            order_id=order_id,
+            orphans=summary,
         )
 
     return result
 
-def record_orphan_tracking(conn, order_id, orphaned_fields):
+
+@db_retry
+def record_orphan_tracking(order_id: str, orphaned_fields: list) -> int:
+    """
+    Insert unresolved FK references into pipeline_audit.orphan_tracking.
+    Uses ON CONFLICT DO NOTHING for idempotency — safe to call multiple times.
+    Returns count of rows inserted.
+    """
     if not orphaned_fields:
         return 0
 
-    # FOCUS HERE <_______________________________________>
     sql = """
-        INSERT INTO fastfeast.orphan_tracking
-            (order_id, orphan_type, raw_id, is_resolved, retry_count, detected_at)
+        INSERT INTO pipeline_audit.orphan_staging
+            (record_type, record_id, missing_fk_type, missing_fk_value,
+             source_file, arrived_at, status)
         VALUES
-            (%s, %s, %s, false, 0, %s)
+            (%s, %s, %s, %s, %s, %s, 'pending')
         ON CONFLICT DO NOTHING """
+    
     # WHY ON CONFLICT DO NOTHING? 
     # duplicate tracking rows not inserted -> [layer 2 of idempotency handling]
     # This makes the function idempotent —> safe to call multiple times.
@@ -128,20 +143,22 @@ def record_orphan_tracking(conn, order_id, orphaned_fields):
 
     try:
         inserted = execute_many(sql, rows)
-
         logger.debug(
-            f"[ORPHAN DETECTOR] {inserted} tracking row(s) inserted | order_id={order_id}"
+            "orphan_tracking_inserted",
+            order_id=order_id,
+            count=inserted,
         )
         return inserted
 
     except Exception as e:
         logger.error(
-            f"[ORPHAN DETECTOR] Failed to insert tracking rows "
-            f"for order_id={order_id}: {e}"
+            "orphan_tracking_failed",
+            order_id=order_id,
+            error=str(e),
         )
         return 0
 
-# Returns True if the record has ANY orphaned FK, False if all clean.
-def is_orphan(record, dimension_ids):
 
+def is_orphan(record: dict, dimension_ids: dict) -> bool:
+    """Returns True if the record has any unresolvable FK."""
     return detect_orphans(record, dimension_ids)["is_orphan"]

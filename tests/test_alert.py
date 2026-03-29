@@ -4,11 +4,17 @@ test_alert.py
 Test script for pipeline alerting.
 
 How to use:
-    python test_alert.py
+    python tests/test_alert.py
 
 Requirements:
     .env must have SMTP credentials filled in.
+
 """
+import sys
+from pathlib import Path
+
+sys.path.insert(0, str(Path(__file__).parent.parent))
+
 import time
 from alerting.alert_service import send_alert
 from utils.logger import configure_logging

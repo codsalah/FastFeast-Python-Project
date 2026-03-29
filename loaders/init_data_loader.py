@@ -123,7 +123,6 @@ class DataLoader:
         mapping = COLUMN_MAPPINGS.get(table, {})
         rename_dict = {csv_col: schema_col for csv_col, schema_col in mapping.items() if csv_col in df.columns and schema_col is not None}
         df = df.rename(columns=rename_dict)
-
         schema_cols = SCHEMA_COLUMNS.get(table, [])
         keep_cols = [col for col in schema_cols if col not in ['created_at', 'updated_at']]
         df = df[[col for col in keep_cols if col in df.columns]]
@@ -162,13 +161,13 @@ class DataLoader:
             set_clause = ','.join([f"{col}=EXCLUDED.{col}" for col in columns if col != natural_key]) + ",updated_at=NOW()"
 
             query = f"""
-            INSERT INTO fastfeast.{table} ({col_names})
+            INSERT INTO warehouse.{table} ({col_names})
             VALUES ({placeholders})
             ON CONFLICT ({natural_key}) DO UPDATE SET {set_clause}
             """
             self.cursor.executemany(query, rows)
             self.conn.commit()
-            logger.info(f"Upserted {len(rows)} rows into {table}")
+            logger.info(f"Upserted {len(rows)} rows into warehouse.{table}")
         except Exception as e:
             self.conn.rollback()
             logger.error(f"Error upserting {table}: {e}")
@@ -233,10 +232,10 @@ class DataLoader:
 
         for table in tables:
             try:
-                self.cursor.execute(f"SELECT COUNT(*) FROM fastfeast.{table}")
+                self.cursor.execute(f"SELECT COUNT(*) FROM warehouse.{table}")
                 count = self.cursor.fetchone()[0]
                 status = "SUCCESS" if count > 0 else "WARNING"
-                logger.info(f"{status}: {table} - {count} rows")
+                logger.info(f"{status}: warehouse.{table} — {count} rows")
             except Exception as e:
                 logger.error(f"Error counting {table}: {e}")
 
