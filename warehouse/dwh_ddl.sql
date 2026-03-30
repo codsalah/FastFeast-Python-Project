@@ -98,13 +98,37 @@ CREATE TABLE IF NOT EXISTS dim_channel (
 );
 
 CREATE TABLE IF NOT EXISTS dim_priority (
-    priority_key             integer PRIMARY KEY,
-    priority_id              integer,
+    -- Static lookup: priority levels rarely change; no SCD2 versioning needed.
+    priority_id              integer PRIMARY KEY,
     priority_code            varchar(10),
     priority_name            varchar(50),
-    sla_first_response_min   integer NOT NULL,
-    sla_resolution_min       integer NOT NULL
+    sla_first_response_min   integer,
+    sla_resolution_min       integer
 );
+
+-- ════════════════════════════════════════════════════════════
+-- SCD2 SURROGATE KEY DEFAULTS (idempotent)
+-- Ensures loaders can INSERT without explicitly providing *_key.
+-- Keeps ability to reserve -1 for Unknown members.
+-- ════════════════════════════════════════════════════════════
+
+CREATE SEQUENCE IF NOT EXISTS dim_customer_key_seq;
+ALTER SEQUENCE dim_customer_key_seq OWNED BY dim_customer.customer_key;
+ALTER TABLE dim_customer ALTER COLUMN customer_key SET DEFAULT nextval('dim_customer_key_seq');
+
+CREATE SEQUENCE IF NOT EXISTS dim_driver_key_seq;
+ALTER SEQUENCE dim_driver_key_seq OWNED BY dim_driver.driver_key;
+ALTER TABLE dim_driver ALTER COLUMN driver_key SET DEFAULT nextval('dim_driver_key_seq');
+
+CREATE SEQUENCE IF NOT EXISTS dim_restaurant_key_seq;
+ALTER SEQUENCE dim_restaurant_key_seq OWNED BY dim_restaurant.restaurant_key;
+ALTER TABLE dim_restaurant ALTER COLUMN restaurant_key SET DEFAULT nextval('dim_restaurant_key_seq');
+
+CREATE SEQUENCE IF NOT EXISTS dim_agent_key_seq;
+ALTER SEQUENCE dim_agent_key_seq OWNED BY dim_agent.agent_key;
+ALTER TABLE dim_agent ALTER COLUMN agent_key SET DEFAULT nextval('dim_agent_key_seq');
+
+
 
 
 -- ════════════════════════════════════════════════════════════
@@ -144,7 +168,7 @@ CREATE TABLE IF NOT EXISTS fact_tickets (
     restaurant_key               integer REFERENCES dim_restaurant(restaurant_key),
     agent_key                    integer NOT NULL REFERENCES dim_agent(agent_key),
     reason_key                   integer NOT NULL REFERENCES dim_reason(reason_key),
-    priority_key                 integer NOT NULL REFERENCES dim_priority(priority_key),
+    priority_id                  integer REFERENCES dim_priority(priority_id),
     channel_key                  integer NOT NULL REFERENCES dim_channel(channel_key),
     date_key                     integer NOT NULL REFERENCES dim_date(date_key),
     status                       varchar(50) NOT NULL,
