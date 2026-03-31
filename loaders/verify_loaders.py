@@ -10,11 +10,28 @@ from loaders.dim_customer_loader import DimCustomerLoader
 from loaders.dim_agent_loader import DimAgentLoader
 from loaders.dim_driver_loader import DimDriverLoader
 from loaders.dim_restaurant_loader import DimRestaurantLoader
+from loaders.dim_static_loader import load_static_dimensions
 
 SIMULATE_DAY_SCRIPT = os.path.join(
     os.path.dirname(os.path.abspath(__file__)),
     "..", "data_generators", "simulate_day.py"
 )
+
+# Possible batch locations
+POSSIBLE_BATCH_PATHS = [
+    "data/input/batch",
+    "data_generators/data/input/batch",
+    "scripts/data/input/batch",
+]
+
+
+def find_batch_dir(batch_date: str) -> str:
+    """Find batch directory in possible locations."""
+    for base_path in POSSIBLE_BATCH_PATHS:
+        batch_dir = os.path.join(base_path, batch_date)
+        if os.path.exists(batch_dir):
+            return batch_dir
+    return None
 
 
 def invoke_simulate_day(batch_date: date, verbose: bool = False) -> bool:
@@ -56,12 +73,31 @@ def verify_all_scd2(start_date: date, num_days: int, invoke: bool = False, verbo
                     print(f"[WARN] Skipping loader run for {date_str} due to simulation failure.")
                     continue
 
+            # FIND THE BATCH DIRECTORY
+            batch_dir = find_batch_dir(date_str)
+            if not batch_dir:
+                print(f"[ERROR] Batch directory not found for {date_str}")
+                print("Searched in:")
+                for base_path in POSSIBLE_BATCH_PATHS:
+                    print(f"  - {os.path.join(base_path, date_str)}")
+                continue
+
+            print(f"Using batch directory: {batch_dir}")
+
+            # LOAD STATIC DIMENSIONS
+            print("\n[STATIC DIMENSIONS]")
+            static_results = load_static_dimensions(batch_dir, run_id=0)  # run_id ignored
+            for table, count in static_results.items():
+                print(f"  {table}: {count} records loaded")
+
+            # LOAD SCD2 DIMENSIONS
+            print("\n[SCD2 DIMENSIONS]")
             for loader in scd2_loaders:
                 entity = loader.table_name.split(".")[-1].replace("dim_", "")
 
                 # restaurants are saved as .json by the batch generator; everything else is .csv
-                csv_path  = f"data/input/batch/{date_str}/{entity}s.csv"
-                json_path = f"data/input/batch/{date_str}/{entity}s.json"
+                csv_path  = os.path.join(batch_dir, f"{entity}s.csv")
+                json_path = os.path.join(batch_dir, f"{entity}s.json")
 
                 if os.path.exists(csv_path):
                     fpath = csv_path
@@ -82,7 +118,6 @@ def verify_all_scd2(start_date: date, num_days: int, invoke: bool = False, verbo
                     f"| SCD2: {res.scd2_updated} | SCD1: {res.scd1_updated} "
                     f"| Unchanged: {res.unchanged}"
                 )
-
 
     finally:
         close_pool()
