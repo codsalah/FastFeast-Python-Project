@@ -82,18 +82,20 @@ CREATE TABLE IF NOT EXISTS dim_agent (
     is_current     boolean NOT NULL DEFAULT TRUE
 );
 
+-- ════════════════════════════════════════════════════════════
+-- STATIC DIMENSION TABLES (Use natural keys as primary keys)
+-- ════════════════════════════════════════════════════════════
+
 CREATE TABLE IF NOT EXISTS dim_reason (
-    reason_key             integer PRIMARY KEY,
-    reason_id              integer,
-    reason_name            varchar(256),
-    reason_category_name   varchar(100),
-    severity_level         smallint,
-    typical_refund_pct     decimal(5,4)
+    reason_id                integer PRIMARY KEY,  -- Natural key is the PK
+    reason_name              varchar(256),
+    reason_category_name     varchar(100),
+    severity_level           smallint,
+    typical_refund_pct       decimal(5,4)
 );
 
 CREATE TABLE IF NOT EXISTS dim_channel (
-    channel_key    integer PRIMARY KEY,
-    channel_id     integer,
+    channel_id     integer PRIMARY KEY,  -- Natural key is the PK
     channel_name   varchar(50)
 );
 
@@ -167,9 +169,9 @@ CREATE TABLE IF NOT EXISTS fact_tickets (
     driver_key                   integer REFERENCES dim_driver(driver_key),
     restaurant_key               integer REFERENCES dim_restaurant(restaurant_key),
     agent_key                    integer NOT NULL REFERENCES dim_agent(agent_key),
-    reason_key                   integer NOT NULL REFERENCES dim_reason(reason_key),
+    reason_id                    integer NOT NULL REFERENCES dim_reason(reason_id),
     priority_id                  integer REFERENCES dim_priority(priority_id),
-    channel_key                  integer NOT NULL REFERENCES dim_channel(channel_key),
+    channel_id                   integer NOT NULL REFERENCES dim_channel(channel_id),
     date_key                     integer NOT NULL REFERENCES dim_date(date_key),
     status                       varchar(50) NOT NULL,
     refund_amount                decimal(10,2),
