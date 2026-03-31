@@ -117,13 +117,14 @@ scd:
   dim_customer:
     tracked_fields: [segment_name, region_name]
   # When these change → close old row, insert new version
- 
+
   dim_driver:
     tracked_fields: [is_active, region_name]
- 
+
   dim_restaurant:
-    tracked_fields: [is_active]
-  # rating_avg not tracked → overwritten daily (SCD Type 1)
+    tracked_fields: [is_active, price_tier]
+  # price_tier added: business-critical for revenue analysis → SCD2 history required
+  # rating_avg NOT tracked → overwritten daily (SCD Type 1 in-place)
  
   dim_agent:
     tracked_fields: [team_name, skill_level, is_active]

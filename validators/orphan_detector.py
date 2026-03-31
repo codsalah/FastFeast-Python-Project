@@ -125,17 +125,21 @@ def record_orphan_tracking(order_id: str, orphaned_fields: list) -> int:
         return 0
 
     sql = """
-        INSERT INTO pipeline_audit.orphan_tracking
-            (order_id, orphan_type, raw_id, is_resolved, retry_count, detected_at)
+        INSERT INTO pipeline_audit.orphan_staging
+            (record_type, record_id, missing_fk_type, missing_fk_value,
+             source_file, arrived_at, status)
         VALUES
-            (%s, %s, %s, false, 0, now())
-        ON CONFLICT DO NOTHING
-    """
+            (%s, %s, %s, %s, %s, %s, 'pending')
+        ON CONFLICT DO NOTHING """
+    
+    # WHY ON CONFLICT DO NOTHING? 
+    # duplicate tracking rows not inserted -> [layer 2 of idempotency handling]
+    # This makes the function idempotent —> safe to call multiple times.
 
-    rows = [
-        (order_id, o["orphan_type"], int(o["raw_id"]))
-        for o in orphaned_fields
-    ]
+    now = datetime.now(timezone.utc)
+
+    # Turn each orphaned field into a tuple of data ready to insert into a database.
+    rows = [ (order_id, o["orphan_type"], o["raw_id"], now) for o in orphaned_fields ]
 
     try:
         inserted = execute_many(sql, rows)
