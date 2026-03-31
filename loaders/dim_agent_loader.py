@@ -8,11 +8,12 @@ class DimAgentLoader(BaseSCD2Loader):
     @property
     def natural_key(self) -> str: return "agent_id"
     @property
-    def tracked_fields(self) -> list[str]: return ["agent_name", "skill_level", "team_name"]
+    def tracked_fields(self) -> list[str]: 
+        return ["agent_name", "skill_level", "team_name", "is_active"]
 
     def load(self, df, batch_date, source_file):
-        teams = pd.read_csv("data/master/teams.csv")
-        df = df.merge(teams[["team_id", "team_name"]], on="team_id", how="left")
+        teams = pd.read_csv("data/master/teams.csv")[["team_id", "team_name"]]
+        df = df.merge(teams, on="team_id", how="left")
         return super().load(df, batch_date, source_file)
 
     def _build_insert_row(self, record, batch_date):
@@ -20,4 +21,9 @@ class DimAgentLoader(BaseSCD2Loader):
                 "valid_from": batch_date, "valid_to": None, "is_current": True}
 
     def _build_update_fields(self, record):
-        return {f: record.get(f) for f in self.tracked_fields}
+        return {
+            "agent_name": record.get("agent_name"),
+            "skill_level": record.get("skill_level"),
+            "team_name": record.get("team_name"),
+            "is_active": self._coerce_bool(record.get("is_active"))
+        }
