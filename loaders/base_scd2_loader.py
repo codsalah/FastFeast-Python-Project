@@ -67,9 +67,6 @@ class BaseSCD2Loader(ABC):
                 self._insert_new(record, batch_date)
                 result.inserted += 1
 
-            elif not self._detect_changes(record, active_row):
-                result.unchanged += 1
-
             elif self._scd1_condition(record, active_row):
                 before = {f: active_row.get(f) for f in self.tracked_fields}
                 after  = self._build_update_fields(record)
@@ -80,6 +77,9 @@ class BaseSCD2Loader(ABC):
                 print(f"  record_before_scd1: {before}")
                 print(f"  record_after_scd1:  {after}")
                 result.scd1_updated += 1
+
+            elif not self._detect_changes(record, active_row):
+                result.unchanged += 1
 
             elif active_row["valid_from"] == batch_date:
                 before = {f: active_row.get(f) for f in self.tracked_fields}
