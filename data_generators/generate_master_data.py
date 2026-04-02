@@ -235,9 +235,9 @@ def gen_customers(regions, start_id=1, count=INITIAL_CUSTOMERS):
         gender = random.choice(["male", "female"])
         name = gen_name(gender)
 
-        # Data quality issues (~5%)
-        has_issue = random.random() < 0.05
-        issue_type = random.choice(["null_name", "invalid_email", "invalid_phone", "null_region"]) if has_issue else None
+        # Data quality issues (~25% - increased for testing)
+        has_issue = random.random() < 0.25
+        issue_type = random.choice(["null_name", "invalid_email", "invalid_phone", "null_region", "invalid_gender", "null_segment"]) if has_issue else None
 
         customers.append({
             "customer_id": customer_id,
@@ -245,9 +245,9 @@ def gen_customers(regions, start_id=1, count=INITIAL_CUSTOMERS):
             "email": gen_email(name or "Unknown", valid=(issue_type != "invalid_email")),
             "phone": gen_phone(valid=(issue_type != "invalid_phone")),
             "region_id": None if issue_type == "null_region" else random.choice(region_ids),
-            "segment_id": 2 if random.random() < 0.10 else 1,
+            "segment_id": None if issue_type == "null_segment" else (2 if random.random() < 0.10 else 1),
             "signup_date": rand_date(2020, 2026).date().isoformat(),
-            "gender": gender,
+            "gender": None if issue_type == "invalid_gender" else gender,
             "created_at": rand_date(2020, 2026).isoformat(sep=" "),
             "updated_at": datetime.now().isoformat(sep=" ")
         })
@@ -273,16 +273,16 @@ def gen_restaurants(regions, categories):
         prep_range = PREP_TIME_BY_CATEGORY.get(category_id, (10, 25))
 
         for name in names:
-            # Data quality issues (~3%)
-            has_issue = random.random() < 0.03
-            issue_type = random.choice(["null_name", "invalid_rating", "null_category"]) if has_issue else None
+            # Data quality issues (~20% - increased for testing)
+            has_issue = random.random() < 0.20
+            issue_type = random.choice(["null_name", "invalid_rating", "null_category", "invalid_price_tier"]) if has_issue else None
 
             restaurants.append({
                 "restaurant_id": restaurant_id,
                 "restaurant_name": None if issue_type == "null_name" else name,
                 "region_id": random.choice(region_ids),
                 "category_id": None if issue_type == "null_category" else category_id,
-                "price_tier": random.choice(["Low", "Mid", "High"]),
+                "price_tier": random.choice(["Cheap", "", None]) if issue_type == "invalid_price_tier" else random.choice(["Low", "Mid", "High"]),
                 "rating_avg": random.choice([-1, 6, None]) if issue_type == "invalid_rating" else round(random.uniform(3.2, 4.9), 2),
                 "prep_time_avg_min": random.randint(*prep_range),
                 "is_active": random.choices([True, False], weights=[0.95, 0.05])[0],
@@ -307,18 +307,18 @@ def gen_drivers(regions, start_id=1, count=INITIAL_DRIVERS):
         hire_date = rand_date(2019, 2026)
         days = (datetime(2026, 2, 1) - hire_date).days
 
-        # Data quality issues (~4%)
-        has_issue = random.random() < 0.04
-        issue_type = random.choice(["invalid_phone", "invalid_national_id", "null_name", "invalid_rate"]) if has_issue else None
+        # Data quality issues (~20% - increased for testing)
+        has_issue = random.random() < 0.20
+        issue_type = random.choice(["invalid_phone", "invalid_national_id", "null_name", "invalid_rate", "null_region", "invalid_vehicle"]) if has_issue else None
 
         drivers.append({
             "driver_id": driver_id,
             "driver_name": None if issue_type == "null_name" else name,
             "driver_phone": gen_phone(valid=(issue_type != "invalid_phone")),
             "national_id": random.choice(["", "N/A", "123", None]) if issue_type == "invalid_national_id" else f"{random.randint(2, 3)}{random.randint(10000000000000, 99999999999999)}",
-            "region_id": random.choice(region_ids),
+            "region_id": None if issue_type == "null_region" else random.choice(region_ids),
             "shift": random.choice(["morning", "evening", "night"]),
-            "vehicle_type": vehicle,
+            "vehicle_type": random.choice(["truck", "", "scooter"]) if issue_type == "invalid_vehicle" else vehicle,
             "hire_date": hire_date.date().isoformat(),
             "rating_avg": round(random.uniform(3.5, 5.0), 2),
             "on_time_rate": random.choice([-0.5, 1.5, None]) if issue_type == "invalid_rate" else on_time,
@@ -366,13 +366,13 @@ def gen_agents(teams):
         }
         handle_time, resolution_rate, csat = metrics[skill]
 
-        # Data quality issues (~3%)
-        has_issue = random.random() < 0.03
-        issue_type = random.choice(["invalid_email", "invalid_phone", "null_team"]) if has_issue else None
+        # Data quality issues (~20% - increased for testing)
+        has_issue = random.random() < 0.20
+        issue_type = random.choice(["invalid_email", "invalid_phone", "null_team", "null_name"]) if has_issue else None
 
         agents.append({
             "agent_id": i + 1,
-            "agent_name": name,
+            "agent_name": None if issue_type == "null_name" else name,
             "agent_email": gen_email(name, "fastfeast.com", valid=(issue_type != "invalid_email")),
             "agent_phone": gen_phone(valid=(issue_type != "invalid_phone")),
             "team_id": None if issue_type == "null_team" else random.choice(team_ids),
