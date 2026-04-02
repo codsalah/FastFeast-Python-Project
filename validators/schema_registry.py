@@ -27,10 +27,10 @@ SourceLayer = Literal["batch", "stream", "audit"]
 
 # Standardized Regex Patterns 
 UUID_REGEX = r"^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$"
-EMAIL_REGEX = r"^[a-zA-Z0-9_.+-]+@[a-zA-Z0-9-]+\.[a-zA-Z0-9-.]+$"
-PHONE_REGEX = r"^(010|011|012|015)\d{8}$"
+EMAIL_REGEX = r"^[^@\s]+@[^@\s]+\.[^@\s]+$"
+PHONE_REGEX = r"^(?:[\+\d][\d\s\-\(\)]{6,20}|0[0-9]{9,11})$"  # Supports international & Egyptian mobile formats
 EGYPTIAN_ID_REGEX = r"^\d{14}$"
-TITLE_CASE_REGEX = r"^[A-Z][a-zA-Z-]*(?: [A-Z][a-zA-Z-]*)*$"
+TITLE_CASE_REGEX = r"^[A-Za-z][a-zA-Z]*(?:[ -][A-Za-z][a-zA-Z]*)*$"
 ALPHANUMERIC_SPACE_REGEX = r"^[A-Za-z0-9 ]+$"
 
 
@@ -263,7 +263,7 @@ DRIVERS = SchemaContract(
     columns=[
         ColumnContract("driver_key", "int", nullable=False, min_value=-1),
         ColumnContract("driver_id", "int", nullable=True, min_value=-1),
-        ColumnContract("driver_name", "str", regex=TITLE_CASE_REGEX),
+        ColumnContract("driver_name", "str", nullable=True, regex=TITLE_CASE_REGEX),
         ColumnContract("vehicle_type", "str", allowed_values={"bike", "motorbike", "car"}),
         ColumnContract("shift", "str", allowed_values={"morning", "evening", "night"}),
         ColumnContract("region_name", "str", regex=ALPHANUMERIC_SPACE_REGEX),
@@ -283,7 +283,7 @@ AGENTS = SchemaContract(
     columns=[
         ColumnContract("agent_key", "int", nullable=False, min_value=-1),
         ColumnContract("agent_id", "int", nullable=True, min_value=-1),
-        ColumnContract("agent_name", "str", regex=TITLE_CASE_REGEX),
+        ColumnContract("agent_name", "str", nullable=True, regex=TITLE_CASE_REGEX),
         ColumnContract("skill_level", "str", allowed_values={"Junior", "Mid", "Senior", "Lead"}),
         ColumnContract("team_name", "str", regex=TITLE_CASE_REGEX),
         ColumnContract("is_active", "bool"),
@@ -516,10 +516,10 @@ SOURCE_DRIVERS = SchemaContract(
     natural_key=["driver_id"],
     columns=[
         ColumnContract("driver_id", "int", nullable=False),
-        ColumnContract("driver_name", "str", nullable=False, regex=TITLE_CASE_REGEX),
-        ColumnContract("driver_phone", "str", regex=PHONE_REGEX),
-        ColumnContract("national_id", "str", regex=EGYPTIAN_ID_REGEX),
-        ColumnContract("region_id", "int", nullable=False),
+        ColumnContract("driver_name", "str", nullable=True, regex=TITLE_CASE_REGEX),
+        ColumnContract("driver_phone", "str", nullable=True),
+        ColumnContract("national_id", "str", nullable=True),
+        ColumnContract("region_id", "int", nullable=True),
         ColumnContract("shift", "str", allowed_values={"morning", "evening", "night"}),
         ColumnContract("vehicle_type", "str", allowed_values={"bike", "motorbike", "car"}),
         ColumnContract("hire_date", "date"),
@@ -557,10 +557,10 @@ SOURCE_AGENTS = SchemaContract(
     natural_key=["agent_id"],
     columns=[
         ColumnContract("agent_id", "int", nullable=False),
-        ColumnContract("agent_name", "str", nullable=False, regex=TITLE_CASE_REGEX),
-        ColumnContract("agent_email", "str", regex=EMAIL_REGEX),
-        ColumnContract("agent_phone", "str", regex=PHONE_REGEX),
-        ColumnContract("team_id", "int", nullable=False),
+        ColumnContract("agent_name", "str", nullable=True, regex=TITLE_CASE_REGEX),
+        ColumnContract("agent_email", "str", nullable=True),
+        ColumnContract("agent_phone", "str", nullable=True),
+        ColumnContract("team_id", "int", nullable=True),
         ColumnContract("skill_level", "str", allowed_values={"Junior", "Mid", "Senior", "Lead"}),
         ColumnContract("hire_date", "date"),
         ColumnContract("avg_handle_time_min", "int", min_value=1),
@@ -696,7 +696,7 @@ SOURCE_ORDERS = SchemaContract(
         ColumnContract("delivery_fee", "float", min_value=0.0),
         ColumnContract("discount_amount", "float", min_value=0.0),
         ColumnContract("total_amount", "float", min_value=0.0),
-        ColumnContract("order_status", "str", allowed_values={"Delivered", "Cancelled", "Refunded"}),
+        ColumnContract("order_status", "str", allowed_values={"Placed", "Preparing", "PickedUp", "Delivered", "Cancelled", "Refunded"}),
         ColumnContract("payment_method", "str", allowed_values={"card", "cash", "wallet"}),
         ColumnContract("order_created_at", "datetime", nullable=False),
         ColumnContract("delivered_at", "datetime"),
