@@ -30,7 +30,7 @@ UUID_REGEX = r"^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$"
 EMAIL_REGEX = r"^[a-zA-Z0-9_.+-]+@[a-zA-Z0-9-]+\.[a-zA-Z0-9-.]+$"
 PHONE_REGEX = r"^(010|011|012|015)\d{8}$"
 EGYPTIAN_ID_REGEX = r"^\d{14}$"
-TITLE_CASE_REGEX = r"^[A-Z][a-z]+(?: [A-Z][a-z]*)*$"
+TITLE_CASE_REGEX = r"^[A-Z][a-zA-Z-]*(?: [A-Z][a-zA-Z-]*)*$"
 ALPHANUMERIC_SPACE_REGEX = r"^[A-Za-z0-9 ]+$"
 
 
@@ -498,15 +498,13 @@ SOURCE_CUSTOMERS = SchemaContract(
     natural_key=["customer_id"],
     columns=[
         ColumnContract("customer_id", "int", nullable=False),
-        ColumnContract("full_name", "str", regex=TITLE_CASE_REGEX),
+        ColumnContract("full_name", "str", nullable=False, regex=TITLE_CASE_REGEX),
         ColumnContract("email", "str", regex=EMAIL_REGEX),
         ColumnContract("phone", "str", regex=PHONE_REGEX),
         ColumnContract("region_id", "int", nullable=False),
         ColumnContract("segment_id", "int", nullable=False),
         ColumnContract("signup_date", "date"),
         ColumnContract("gender", "str", allowed_values={"male", "female"}),
-        ColumnContract("created_at", "datetime"),
-        ColumnContract("updated_at", "datetime"),
     ],
 )
 
@@ -517,7 +515,7 @@ SOURCE_DRIVERS = SchemaContract(
     natural_key=["driver_id"],
     columns=[
         ColumnContract("driver_id", "int", nullable=False),
-        ColumnContract("driver_name", "str", regex=TITLE_CASE_REGEX),
+        ColumnContract("driver_name", "str", nullable=False, regex=TITLE_CASE_REGEX),
         ColumnContract("driver_phone", "str", regex=PHONE_REGEX),
         ColumnContract("national_id", "str", regex=EGYPTIAN_ID_REGEX),
         ColumnContract("region_id", "int", nullable=False),
@@ -529,8 +527,6 @@ SOURCE_DRIVERS = SchemaContract(
         ColumnContract("cancel_rate", "float", min_value=0.0, max_value=1.0),
         ColumnContract("completed_deliveries", "int", min_value=0),
         ColumnContract("is_active", "bool"),
-        ColumnContract("created_at", "datetime"),
-        ColumnContract("updated_at", "datetime"),
     ],
 )
 
@@ -541,15 +537,13 @@ SOURCE_RESTAURANTS = SchemaContract(
     natural_key=["restaurant_id"],
     columns=[
         ColumnContract("restaurant_id", "int", nullable=False),
-        ColumnContract("restaurant_name", "str"),
+        ColumnContract("restaurant_name", "str", nullable=False),
         ColumnContract("region_id", "int", nullable=False),
         ColumnContract("category_id", "int", nullable=False),
         ColumnContract("price_tier", "str", allowed_values={"Low", "Mid", "High"}),
         ColumnContract("rating_avg", "float", min_value=1.0, max_value=5.0),
         ColumnContract("prep_time_avg_min", "int", min_value=1),
         ColumnContract("is_active", "bool"),
-        ColumnContract("created_at", "datetime"),
-        ColumnContract("updated_at", "datetime"),
     ],
 )
 
@@ -560,7 +554,7 @@ SOURCE_AGENTS = SchemaContract(
     natural_key=["agent_id"],
     columns=[
         ColumnContract("agent_id", "int", nullable=False),
-        ColumnContract("agent_name", "str", regex=TITLE_CASE_REGEX),
+        ColumnContract("agent_name", "str", nullable=False, regex=TITLE_CASE_REGEX),
         ColumnContract("agent_email", "str", regex=EMAIL_REGEX),
         ColumnContract("agent_phone", "str", regex=PHONE_REGEX),
         ColumnContract("team_id", "int", nullable=False),
@@ -570,8 +564,6 @@ SOURCE_AGENTS = SchemaContract(
         ColumnContract("resolution_rate", "float", min_value=0.0, max_value=1.0),
         ColumnContract("csat_score", "float", min_value=1.0, max_value=5.0),
         ColumnContract("is_active", "bool"),
-        ColumnContract("created_at", "datetime"),
-        ColumnContract("updated_at", "datetime"),
     ],
 )
 
