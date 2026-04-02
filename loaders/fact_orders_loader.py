@@ -120,7 +120,7 @@ def _resolve_keys(
       bad_df   — rows where date_key could not be resolved (quarantine these)
     """
     customer_keys, driver_keys, restaurant_keys  = [], [], []
-    orphan_cust, orphan_drv                      = [], []
+    orphan_cust, orphan_drv, orphan_rest        = [], [], []
     date_keys                                    = []
     bad_indices                                  = []
 
@@ -149,6 +149,7 @@ def _resolve_keys(
         # Store original IDs only when the surrogate resolved to -1 (orphan)
         orphan_cust.append(cid if ck == -1 else None)
         orphan_drv.append(did  if dk == -1 else None)
+        orphan_rest.append(rid if rk == -1 else None)
 
     good = df.drop(index=bad_indices).copy()
     bad  = df.loc[bad_indices].copy()
@@ -160,6 +161,7 @@ def _resolve_keys(
         good["date_key"]                    = date_keys
         good["original_orphan_customer_id"] = orphan_cust
         good["original_orphan_driver_id"]   = orphan_drv
+        good["original_orphan_restaurant_id"] = orphan_rest
 
     return good, bad
 
@@ -188,6 +190,9 @@ def _track_orphans(df: pd.DataFrame) -> int:
 
         if pd.notna(row.get("original_orphan_driver_id")):
             rows.append((order_id, "driver", int(row["original_orphan_driver_id"]), now))
+
+        if pd.notna(row.get("original_orphan_restaurant_id")):
+            rows.append((order_id, "restaurant", int(row["original_orphan_restaurant_id"]), now))
 
     if not rows:
         return 0
@@ -305,6 +310,7 @@ def load(file_path: str, run_id: int) -> None:
             "order_created_at", "delivered_at",
             "original_orphan_customer_id",
             "original_orphan_driver_id",
+            "original_orphan_restaurant_id",
             "version", "is_backfilled",
         ]
         rows = good[columns].where(good[columns].notna(), other=None).to_dict("records")
@@ -327,6 +333,7 @@ def load(file_path: str, run_id: int) -> None:
         orphan_rows = good[
             good["original_orphan_customer_id"].notna()
             | good["original_orphan_driver_id"].notna()
+            | good["original_orphan_restaurant_id"].notna()
         ]
         if not orphan_rows.empty:
             _track_orphans(orphan_rows)
