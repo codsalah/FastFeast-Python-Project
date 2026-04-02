@@ -11,43 +11,62 @@ from loaders.dim_agent_loader import DimAgentLoader
 from loaders.dim_driver_loader import DimDriverLoader
 from loaders.dim_restaurant_loader import DimRestaurantLoader
 from loaders.dim_static_loader import load_static_dimensions
+from utils.logger import get_logger_name
+from utils.logger import configure_logging
+
+logger = get_logger_name(__name__)
+configure_logging()
 
 SIMULATE_DAY_SCRIPT = os.path.join(
     os.path.dirname(os.path.abspath(__file__)),
     "..", "data_generators", "simulate_day.py"
 )
 
-# Possible batch locations
-POSSIBLE_BATCH_PATHS = [
-    "data/input/batch",
-    "data_generators/data/input/batch",
-    "scripts/data/input/batch",
-]
+# Possible batch locations (STICK TO ONE PATH)
+# POSSIBLE_BATCH_PATHS = [
+#     "data/input/batch",
+#     "data_generators/data/input/batch",
+#     "scripts/data/input/batch",
+# ]
+
+
+BASE_BATCH_PATH = "data/input/batch"
 
 
 def find_batch_dir(batch_date: str) -> str:
-    """Find batch directory in possible locations."""
-    for base_path in POSSIBLE_BATCH_PATHS:
-        batch_dir = os.path.join(base_path, batch_date)
-        if os.path.exists(batch_dir):
-            return batch_dir
+    batch_dir = os.path.join(BASE_BATCH_PATH, batch_date)
+
+    if os.path.exists(batch_dir):
+        return batch_dir
+
+    logger.error(   
+        "batch_dir_not_found",
+        batch_date=batch_date,
+        attempted_path=batch_dir,
+    )
+
     return None
 
 
 def invoke_simulate_day(batch_date: date, verbose: bool = False) -> bool:
-    """Run simulate_day.py for the given date with --skip-master."""
     date_str = batch_date.strftime("%Y-%m-%d")
     cmd = [sys.executable, SIMULATE_DAY_SCRIPT, "--date", date_str, "--skip-master"]
+
     if verbose:
         cmd.append("--verbose")
-
-    print(f"\n>>> Invoking simulate_day.py for {date_str} <<<")
+        
+    logger.info("invoke_simulate_day", date=date_str, cmd=cmd)
     result = subprocess.run(cmd, text=True)
-    if result.returncode != 0:
-        print(f"[ERROR] simulate_day.py failed for {date_str}")
-        return False
-    return True
 
+    if result.returncode != 0:
+        logger.error(
+            "simulate_day_failed",
+            date=date_str,
+            return_code=result.returncode,
+        )
+        return False
+    logger.info("simulate_day_success", date=date_str)
+    return True
 
 def verify_all_scd2(start_date: date, num_days: int, invoke: bool = False, verbose: bool = False):
     init_pool(get_settings())
