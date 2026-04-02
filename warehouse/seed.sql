@@ -36,12 +36,3 @@ INSERT INTO dim_restaurant (
     'Unknown', 'Unknown', 'Unknown', NULL, 
     false, '1900-01-01', NULL, true
 );
-
--- Agent Dimension
-INSERT INTO dim_agent (
-    agent_key, agent_id, agent_name, skill_level, 
-    team_name, is_active, valid_from, valid_to, is_current
-) VALUES (
-    -1, NULL, 'Unknown', 'Unknown', 
-    'Unknown', false, '1900-01-01', NULL, true
-);

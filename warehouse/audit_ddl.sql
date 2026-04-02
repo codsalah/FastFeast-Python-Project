@@ -7,12 +7,12 @@
 CREATE SCHEMA IF NOT EXISTS pipeline_audit;
 SET search_path TO pipeline_audit, public;
 
-
 -- ════════════════════════════════════════════════════════════
 -- PIPELINE OPERATIONAL TABLES
 -- ════════════════════════════════════════════════════════════
 
-CREATE TABLE IF NOT EXISTS pipeline_run_log (
+CREATE TABLE IF NOT EXISTS pipeline_run_log 
+(
     run_id            serial PRIMARY KEY,
     run_type          varchar(50) NOT NULL,
     run_date          date NOT NULL,
@@ -44,26 +44,26 @@ CREATE TABLE IF NOT EXISTS file_tracker (
 );
 
 CREATE TABLE IF NOT EXISTS pipeline_quality_metrics (
-    metric_id               serial PRIMARY KEY,
-    run_id                  integer NOT NULL REFERENCES pipeline_run_log(run_id),
-    run_date                date NOT NULL,
-    table_name              varchar(100) NOT NULL,
-    source_file             varchar(512),
-    total_records           integer,
-    valid_records           integer,
-    quarantined_records     integer,
-    orphaned_records        integer,
-    duplicate_count         integer,
-    null_violations         integer,
-    duplicate_rate          decimal(5,4),
-    orphan_rate             decimal(5,4),
-    null_rate               decimal(5,4),
-    quarantine_rate         decimal(5,4),
-    processing_latency_sec  decimal(10,2),
-    quality_details         jsonb,
-    recorded_at             timestamp NOT NULL DEFAULT now()
+    metric_id                serial PRIMARY KEY,
+    run_id                   integer NOT NULL REFERENCES pipeline_run_log(run_id),
+    run_date                 date NOT NULL,
+    table_name               varchar(100) NOT NULL,
+    source_file              varchar(512),
+    total_records            integer,
+    valid_records            integer,
+    quarantined_records      integer,
+    orphaned_records         integer,
+    duplicate_count          integer,
+    null_violations          integer,
+    business_rule_violations integer,
+    duplicate_rate           decimal(6,4),
+    orphan_rate              decimal(6,4),
+    null_rate                decimal(6,4),
+    quarantine_rate          decimal(6,4),
+    processing_latency_sec   decimal(10,2),
+    quality_details          jsonb,
+    recorded_at              timestamp NOT NULL DEFAULT now()
 );
-
 
 -- ════════════════════════════════════════════════════════════
 -- SUPPORT TABLES — ORPHAN + QUARANTINE
@@ -77,8 +77,7 @@ CREATE TABLE IF NOT EXISTS orphan_tracking (
     is_resolved    boolean NOT NULL DEFAULT FALSE,
     retry_count    smallint NOT NULL DEFAULT 0,
     detected_at    timestamp NOT NULL,
-    resolved_at    timestamp,
-    UNIQUE(order_id, orphan_type)
+    resolved_at    timestamp
 );
 
 CREATE TABLE IF NOT EXISTS quarantine (
@@ -86,7 +85,7 @@ CREATE TABLE IF NOT EXISTS quarantine (
     source_file     varchar(512) NOT NULL,
     entity_type     varchar(100) NOT NULL,
     raw_record      jsonb NOT NULL,
-    error_type      varchar(50) NOT NULL,
+    error_type      varchar(100) NOT NULL,
     error_details   text NOT NULL,
     orphan_type     varchar(50),
     raw_orphan_id   varchar(256),
@@ -94,20 +93,8 @@ CREATE TABLE IF NOT EXISTS quarantine (
     quarantined_at  timestamp NOT NULL DEFAULT now()
 );
 
--- Migration: Ensure pipeline_run_id column exists in quarantine (for older schema versions)
-DO $$
-BEGIN
-    IF NOT EXISTS (
-        SELECT 1 FROM information_schema.columns 
-        WHERE table_schema = 'pipeline_audit' 
-        AND table_name = 'quarantine' 
-        AND column_name = 'pipeline_run_id'
-    ) THEN
-        ALTER TABLE pipeline_audit.quarantine ADD COLUMN pipeline_run_id integer REFERENCES pipeline_run_log(run_id);
-    END IF;
-END $$;
-
-CREATE INDEX IF NOT EXISTS idx_file_tracker_run_id      ON pipeline_audit.file_tracker(pipeline_run_id);
+CREATE INDEX IF NOT EXISTS idx_file_tracker_run_id       ON pipeline_audit.file_tracker(pipeline_run_id);
 CREATE INDEX IF NOT EXISTS idx_quarantine_run_id         ON pipeline_audit.quarantine(pipeline_run_id);
-CREATE INDEX IF NOT EXISTS idx_orphan_tracking_order_id  ON pipeline_audit.orphan_tracking(order_id, orphan_type);
+CREATE UNIQUE INDEX uq_orphan_tracking_order_type ON pipeline_audit.orphan_tracking(order_id, orphan_type);
 CREATE INDEX IF NOT EXISTS idx_quality_metrics_run_id    ON pipeline_audit.pipeline_quality_metrics(run_id);
+CREATE INDEX idx_orphan_tracking_unresolved ON pipeline_audit.orphan_tracking(is_resolved);

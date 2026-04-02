@@ -14,7 +14,7 @@ SET search_path TO warehouse, public;
 -- ════════════════════════════════════════════════════════════
 
 CREATE TABLE IF NOT EXISTS dim_date (
-    date_key     integer PRIMARY KEY,
+    date_key     integer PRIMARY KEY, 
     full_date    date NOT NULL,
     day          integer NOT NULL,
     month        integer NOT NULL,
@@ -30,15 +30,15 @@ CREATE TABLE IF NOT EXISTS dim_date (
 CREATE TABLE IF NOT EXISTS dim_customer (
     customer_key          integer PRIMARY KEY, -- -1 = Unknown member for orphans
     customer_id           integer,              -- Natural key from source. NULL for Unknown.
-    customer_name_masked  varchar(256),
+    customer_name_masked  varchar(256),--
     gender                varchar(20),
     segment_name          varchar(100),
     region_name           varchar(100),
     city_name             varchar(100),
     signup_date           date,
-    valid_from            date NOT NULL,
-    valid_to              date,
-    is_current            boolean NOT NULL DEFAULT TRUE
+    valid_from            date NOT NULL,--
+    valid_to              date,--
+    is_current            boolean NOT NULL DEFAULT TRUE--
 );
 
 CREATE TABLE IF NOT EXISTS dim_driver (
@@ -56,7 +56,7 @@ CREATE TABLE IF NOT EXISTS dim_driver (
 );
 
 CREATE TABLE IF NOT EXISTS dim_restaurant (
-    restaurant_key   integer PRIMARY KEY,
+    restaurant_key   integer PRIMARY KEY,-- -1 = Unknown member for orphans.
     restaurant_id    integer,
     restaurant_name  varchar(256),
     category_name    varchar(100),
@@ -71,7 +71,7 @@ CREATE TABLE IF NOT EXISTS dim_restaurant (
 );
 
 CREATE TABLE IF NOT EXISTS dim_agent (
-    agent_key      integer PRIMARY KEY,
+    agent_key      integer PRIMARY KEY,--no Unknown member for orphans.
     agent_id       integer,
     agent_name     varchar(256),
     skill_level    varchar(50),
@@ -82,25 +82,30 @@ CREATE TABLE IF NOT EXISTS dim_agent (
     is_current     boolean NOT NULL DEFAULT TRUE
 );
 
+-- ════════════════════════════════════════════════════════════
+-- STATIC DIMENSION TABLES (Use natural keys as primary keys)
+-- ════════════════════════════════════════════════════════════
+
 CREATE TABLE IF NOT EXISTS dim_reason (
-    reason_id              integer PRIMARY KEY,  -- Natural key as PK (no surrogate)
-    reason_name            varchar(256),
-    reason_category_name   varchar(100),
-    severity_level         smallint,
-    typical_refund_pct     decimal(5,4)
+    reason_id                integer PRIMARY KEY,  -- Natural key is the PK
+    reason_name              varchar(256),
+    reason_category_name     varchar(100),
+    severity_level           smallint,
+    typical_refund_pct       decimal(5,4)
 );
 
 CREATE TABLE IF NOT EXISTS dim_channel (
-    channel_id     integer PRIMARY KEY,  -- Natural key as PK (no surrogate)
+    channel_id     integer PRIMARY KEY,  -- Natural key is the PK
     channel_name   varchar(50)
 );
 
 CREATE TABLE IF NOT EXISTS dim_priority (
-    priority_id              integer PRIMARY KEY,  -- Natural key as PK (no surrogate)
+    -- Static lookup: priority levels rarely change; no SCD2 versioning needed.
+    priority_id              integer PRIMARY KEY,
     priority_code            varchar(10),
     priority_name            varchar(50),
-    sla_first_response_min   integer NOT NULL,
-    sla_resolution_min       integer NOT NULL
+    sla_first_response_min   integer,
+    sla_resolution_min       integer
 );
 
 -- ════════════════════════════════════════════════════════════
@@ -125,9 +130,6 @@ CREATE SEQUENCE IF NOT EXISTS dim_agent_key_seq;
 ALTER SEQUENCE dim_agent_key_seq OWNED BY dim_agent.agent_key;
 ALTER TABLE dim_agent ALTER COLUMN agent_key SET DEFAULT nextval('dim_agent_key_seq');
 
--- Reason and Channel key sequences (for static dims) - REMOVED
--- Static dimensions now use natural keys as PK directly
-
 
 -- ════════════════════════════════════════════════════════════
 -- FACT TABLES
@@ -147,10 +149,11 @@ CREATE TABLE IF NOT EXISTS fact_orders (
     total_amount                 decimal(10,2),
     order_status                 varchar(50) NOT NULL,
     payment_method               varchar(50),
-    order_created_at             timestamp NOT NULL,
+    order_created_at             timestamp NOT NULL,-- we should make it consistent with date dimension
     delivered_at                 timestamp,
     original_orphan_customer_id  integer,
     original_orphan_driver_id    integer,
+    --we should add original_orphan_restaurent_id for orphan handling 
     original_orphan_restaurant_id integer,
     version                      smallint NOT NULL DEFAULT 1,
     is_backfilled                boolean NOT NULL DEFAULT FALSE,
@@ -163,8 +166,8 @@ CREATE TABLE IF NOT EXISTS fact_tickets (
     order_key                    integer NOT NULL REFERENCES fact_orders(order_key),
     order_id                     varchar(256) NOT NULL, 
     customer_key                 integer NOT NULL REFERENCES dim_customer(customer_key),
-    driver_key                   integer REFERENCES dim_driver(driver_key),
-    restaurant_key               integer REFERENCES dim_restaurant(restaurant_key),
+    driver_key                   integer NOT NULL REFERENCES dim_driver(driver_key),
+    restaurant_key               integer NOT NULL REFERENCES dim_restaurant(restaurant_key),
     agent_key                    integer NOT NULL REFERENCES dim_agent(agent_key),
     reason_id                    integer NOT NULL REFERENCES dim_reason(reason_id),
     priority_id                  integer NOT NULL REFERENCES dim_priority(priority_id),
@@ -172,17 +175,17 @@ CREATE TABLE IF NOT EXISTS fact_tickets (
     date_key                     integer NOT NULL REFERENCES dim_date(date_key),
     status                       varchar(50) NOT NULL,
     refund_amount                decimal(10,2),
-    sla_first_response_breached  boolean,
-    sla_resolution_breached      boolean,
+    sla_first_response_breached  boolean NOT NULL DEFAULT false,
+    sla_resolution_breached      boolean NOT NULL DEFAULT false,
     first_response_minutes       decimal(8,2),
     resolution_minutes           decimal(8,2),
     created_at                   timestamp NOT NULL,
     first_response_at            timestamp,
     resolved_at                  timestamp,
-    sla_first_due_at             timestamp,
-    sla_resolve_due_at           timestamp,
-    UNIQUE(ticket_id)
+    sla_first_due_at             timestamp NOT NULL,
+    sla_resolve_due_at           timestamp NOT NULL,
 );
+CREATE UNIQUE INDEX uq_fact_tickets_ticket_id ON fact_tickets (ticket_id);
 
 CREATE TABLE IF NOT EXISTS fact_ticket_events (
     event_key       serial PRIMARY KEY,
@@ -192,10 +195,10 @@ CREATE TABLE IF NOT EXISTS fact_ticket_events (
     date_key        integer NOT NULL REFERENCES dim_date(date_key),
     old_status      varchar(50),
     new_status      varchar(50) NOT NULL,
-    event_timestamp timestamp NOT NULL,
-    notes           text NOT NULL,
-    UNIQUE(event_id)
+    event_ts        timestamp NOT NULL,
+    notes           text NOT NULL
 );
+CREATE UNIQUE INDEX uq_fact_ticket_events_event_id ON fact_ticket_events (event_id);
 
 
 -- ════════════════════════════════════════════════════════════
