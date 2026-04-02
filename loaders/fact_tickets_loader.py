@@ -88,18 +88,18 @@ def _build_dim_maps() -> dict:
         agent_map = {int(r["agent_id"]): r["agent_key"] for r in cur.fetchall()}
 
         cur.execute("""
-            SELECT reason_id, reason_id as reason_key
+            SELECT reason_id
             FROM warehouse.dim_reason
             WHERE reason_id IS NOT NULL
         """)
-        reason_map = {int(r["reason_id"]): r["reason_key"] for r in cur.fetchall()}
+        reason_map = {int(r["reason_id"]): r["reason_id"] for r in cur.fetchall()}
 
         cur.execute("""
-            SELECT channel_id, channel_id as channel_key
+            SELECT channel_id
             FROM warehouse.dim_channel
             WHERE channel_id IS NOT NULL
         """)
-        channel_map = {int(r["channel_id"]): r["channel_key"] for r in cur.fetchall()}
+        channel_map = {int(r["channel_id"]): r["channel_id"] for r in cur.fetchall()}
 
         # priority_id is the PK of dim_priority (no separate surrogate in DDL)
         cur.execute("""
@@ -141,8 +141,8 @@ def _resolve_keys(
     """
     Resolve all FK surrogate keys and compute SLA metrics for each ticket row.
 
-    Rows that cannot resolve required FKs (order_key, agent_key, reason_key,
-    channel_key, date_key) are collected as quarantine_records and excluded
+    Rows that cannot resolve required FKs (order_key, agent_key, reason_id,
+    channel_id, date_key) are collected as quarantine_records and excluded
     from the returned good_df.
 
     customer_key / driver_key / restaurant_key are inherited from the matched
@@ -195,8 +195,12 @@ def _resolve_keys(
         driver_key     = order_drv_map.get(order_id_str)   # nullable
         restaurant_key = order_rest_map.get(order_id_str)  # nullable
 
-        # ── priority_id (direct — dim_priority PK is priority_id) ────────
+        # ── priority_id (direct — dim_priority PK is priority_id in DDL) ────────
         priority_id = int(row["priority_id"]) if pd.notna(row.get("priority_id")) else None
+
+        # ── Static dimension keys (natural keys = PKs) ───────────────────────────
+        resolved_reason_id  = reason_map.get(int(row["reason_id"])) if pd.notna(row.get("reason_id")) else None
+        resolved_channel_id = channel_map.get(int(row["channel_id"])) if pd.notna(row.get("channel_id")) else None
 
         # ── SLA timestamps from source ────────────────────────────────────
         fr_at  = pd.to_datetime(row["first_response_at"]) if pd.notna(row.get("first_response_at")) else None
@@ -220,9 +224,9 @@ def _resolve_keys(
             "driver_key":                  driver_key,
             "restaurant_key":              restaurant_key,
             "agent_key":                   agent_key,
-            "reason_id":                  reason_key,
+            "reason_id":                   resolved_reason_id,
             "priority_id":                 priority_id,
-            "channel_id":                 channel_key,
+            "channel_id":                  resolved_channel_id,
             "date_key":                    date_key,
             "first_response_minutes":      fr_min,
             "resolution_minutes":          res_min,
@@ -340,7 +344,7 @@ def load(file_path: str, run_id: int) -> None:
 
         # ── 7. Insert into warehouse ──────────────────────────────────────
         # Column order must match warehouse.fact_tickets DDL exactly.
-        # priority_id is used directly (dim_priority PK = priority_id in DDL).
+        # reason_id and channel_id are used directly (static dims use natural keys as PK).
         # sla_first_due_at / sla_resolve_due_at pass through from source CSV.
         columns = [
             "ticket_id",
