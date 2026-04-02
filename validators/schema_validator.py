@@ -65,12 +65,12 @@ class SchemaValidator:
             if not col_contract.nullable:
                 null_mask = series.isna()
                 if null_mask.any():
-                    self._collect_errors(errors, df, col_contract.name, null_mask, "Critical: Null value not allowed", level="critical")
+                    self._collect_errors(errors, df, col_contract.name, null_mask, f"Critical: [{col_contract.name}] Null value not allowed", level="critical")
 
             # 2. Type Parity
             type_mask = self._check_type(series, col_contract.dtype)
             if type_mask is not None and type_mask.any():
-                self._collect_errors(errors, df, col_contract.name, type_mask, f"Critical: Type mismatch (expected {col_contract.dtype})", level="critical")
+                self._collect_errors(errors, df, col_contract.name, type_mask, f"Critical: [{col_contract.name}] Type mismatch (expected {col_contract.dtype})", level="critical")
 
             # --- Stage 2: Logical Checks (Regex, Ranges, Categorical) ---
             
