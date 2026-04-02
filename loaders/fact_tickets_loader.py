@@ -88,14 +88,14 @@ def _build_dim_maps() -> dict:
         agent_map = {int(r["agent_id"]): r["agent_key"] for r in cur.fetchall()}
 
         cur.execute("""
-            SELECT reason_id, reason_key
+            SELECT reason_id, reason_id as reason_key
             FROM warehouse.dim_reason
             WHERE reason_id IS NOT NULL
         """)
         reason_map = {int(r["reason_id"]): r["reason_key"] for r in cur.fetchall()}
 
         cur.execute("""
-            SELECT channel_id, channel_key
+            SELECT channel_id, channel_id as channel_key
             FROM warehouse.dim_channel
             WHERE channel_id IS NOT NULL
         """)
@@ -220,9 +220,9 @@ def _resolve_keys(
             "driver_key":                  driver_key,
             "restaurant_key":              restaurant_key,
             "agent_key":                   agent_key,
-            "reason_key":                  reason_key,
+            "reason_id":                  reason_key,
             "priority_id":                 priority_id,
-            "channel_key":                 channel_key,
+            "channel_id":                 channel_key,
             "date_key":                    date_key,
             "first_response_minutes":      fr_min,
             "resolution_minutes":          res_min,
@@ -346,7 +346,7 @@ def load(file_path: str, run_id: int) -> None:
             "ticket_id",
             "order_key", "order_id",
             "customer_key", "driver_key", "restaurant_key",
-            "agent_key", "reason_key", "priority_id", "channel_key",
+            "agent_key", "reason_id", "priority_id", "channel_id",
             "date_key",
             "status", "refund_amount",
             "sla_first_response_breached", "sla_resolution_breached",
