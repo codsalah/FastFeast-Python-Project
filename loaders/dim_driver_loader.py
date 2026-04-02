@@ -2,7 +2,7 @@ import pandas as pd
 from loaders.base_scd2_loader import BaseSCD2Loader
 
 class DimDriverLoader(BaseSCD2Loader):
-    def __init__(self, batch_dir: str = "data/master"):
+    def __init__(self, batch_dir: str = "data/input/batch"):
         self.batch_dir = batch_dir
     @property
     def table_name(self) -> str: return "warehouse.dim_driver"
