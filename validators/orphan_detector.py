@@ -80,39 +80,62 @@ def detect_orphans(record: dict, dimension_ids: dict | None) -> dict:
 
     orphaned_fields = []
 
-    ## --- CHECK customer_id ---
+    # --- CHECK customer_id ---
     customer_id = record.get("customer_id")
     if customer_id is not None:
-        if int(customer_id) not in dimension_ids.get("customer_ids", set()):
-            orphaned_fields.append({
-                "field":       "customer_id",
-                "raw_id":      customer_id,
-                "orphan_type": "customer"
-            })
+        try:
+            cid = int(customer_id)
+            if cid not in dimension_ids.get("customer_ids", set()):
+                orphaned_fields.append({
+                    "field":       "customer_id",
+                    "raw_id":      customer_id,
+                    "orphan_type": "customer"
+                })
+        except (ValueError, TypeError):
+             orphaned_fields.append({
+                    "field":       "customer_id",
+                    "raw_id":      customer_id,
+                    "orphan_type": "customer"
+                })
 
     # --- CHECK driver_id ---
     driver_id = record.get("driver_id")
     if driver_id is not None:
-        if int(driver_id) not in dimension_ids.get("driver_ids", set()):
-            orphaned_fields.append({
-                "field":       "driver_id",
-                "raw_id":      driver_id,
-                "orphan_type": "driver"
-            })
+        try:
+            did = int(driver_id)
+            if did not in dimension_ids.get("driver_ids", set()):
+                orphaned_fields.append({
+                    "field":       "driver_id",
+                    "raw_id":      driver_id,
+                    "orphan_type": "driver"
+                })
+        except (ValueError, TypeError):
+             orphaned_fields.append({
+                    "field":       "driver_id",
+                    "raw_id":      driver_id,
+                    "orphan_type": "driver"
+                })
 
     # --- CHECK restaurant_id ---
     restaurant_id = record.get("restaurant_id")
     if restaurant_id is not None:
-        if int(restaurant_id) not in dimension_ids.get("restaurant_ids", set()):
-            orphaned_fields.append({
-                "field":       "restaurant_id",
-                "raw_id":      restaurant_id,
-                "orphan_type": "restaurant"
-            })
+        try:
+            rid = int(restaurant_id)
+            if rid not in dimension_ids.get("restaurant_ids", set()):
+                orphaned_fields.append({
+                    "field":       "restaurant_id",
+                    "raw_id":      restaurant_id,
+                    "orphan_type": "restaurant"
+                })
+        except (ValueError, TypeError):
+             orphaned_fields.append({
+                    "field":       "restaurant_id",
+                    "raw_id":      restaurant_id,
+                    "orphan_type": "restaurant"
+                })
 
     result = {
         "is_orphan":       len(orphaned_fields) > 0,
-        # len > 0 means at least one field was orphaned → True, else False
         "orphaned_fields": orphaned_fields
     }
 
@@ -148,16 +171,11 @@ def record_orphan_tracking(order_id: str, orphaned_fields: list) -> int:
             (%s, %s, %s, %s)
         ON CONFLICT (order_id, orphan_type) DO NOTHING"""
     
-    # WHY ON CONFLICT DO NOTHING? 
-    # duplicate tracking rows not inserted -> [layer 2 of idempotency handling]
-    # This makes the function idempotent —> safe to call multiple times.
-
     now = datetime.now(timezone.utc)
-
-    # Turn each orphaned field into a tuple of data ready to insert into a database.
     rows = [ (order_id, o["orphan_type"], int(o["raw_id"]), now) for o in orphaned_fields ]
 
     try:
+        from warehouse.connection import execute_many
         inserted = execute_many(sql, rows)
         logger.debug(
             "orphan_tracking_inserted",
@@ -180,3 +198,29 @@ def is_orphan(record: dict, dimension_ids: dict | None) -> bool:
     Returns False if dimension_ids is None (detection skipped, not failed).
     """
     return detect_orphans(record, dimension_ids)["is_orphan"]
+
+
+def main():
+    import argparse
+    from warehouse.connection import init_pool, close_pool
+    from config.settings import get_settings
+    
+    parser = argparse.ArgumentParser(description="FastFeast Orphan Detector")
+    parser.add_argument("--date", type=str, help="Process date (YYYY-MM-DD)")
+    args = parser.parse_args()
+    
+    settings = get_settings()
+    init_pool(settings)
+    
+    print(f"Orphan Detection for date: {args.date or 'All'}")
+    dim_ids = load_dimension_ids()
+    
+    print(f"  Customers: {len(dim_ids['customer_ids'])}")
+    print(f"  Drivers: {len(dim_ids['driver_ids'])}")
+    print(f"  Restaurants: {len(dim_ids['restaurant_ids'])}")
+    
+    close_pool()
+    print("\nOrphan detection complete.")
+
+if __name__ == "__main__":
+    main()
