@@ -3,6 +3,9 @@ import logging
 import math
 import psycopg2.extras
 
+import pandas as pd
+import numpy as np
+
 from warehouse.connection import get_cursor
 from utils.retry import db_retry
 from utils.logger import get_logger_name
@@ -10,11 +13,51 @@ from utils.logger import get_logger_name
 logger = get_logger_name(__name__)
 
 
+def _sanitize_record(record: dict) -> dict:
+    """
+    Sanitize a record dict for JSON serialization.
+    Converts pandas NaN, numpy NaN, NaT, and Inf to None.
+    """
+    sanitized = {}
+    for key, value in record.items():
+        if value is None:
+            sanitized[key] = None
+        elif isinstance(value, float):
+            if math.isnan(value) or math.isinf(value):
+                sanitized[key] = None
+            else:
+                sanitized[key] = value
+        elif isinstance(value, np.floating):
+            if np.isnan(value) or np.isinf(value):
+                sanitized[key] = None
+            else:
+                sanitized[key] = float(value)
+        elif isinstance(value, np.integer):
+            sanitized[key] = int(value)
+        elif isinstance(value, np.ndarray):
+            sanitized[key] = value.tolist()
+        elif pd.isna(value):  # Handles pandas NaT, NaN, etc.
+            sanitized[key] = None
+        else:
+            sanitized[key] = value
+    return sanitized
+
+
 def _json_default(obj):
     """Handle NaN and other non-serializable values."""
     if isinstance(obj, float):
         if math.isnan(obj) or math.isinf(obj):
             return None
+    if isinstance(obj, np.floating):
+        if np.isnan(obj) or np.isinf(obj):
+            return None
+        return float(obj)
+    if isinstance(obj, np.integer):
+        return int(obj)
+    if isinstance(obj, np.ndarray):
+        return obj.tolist()
+    if pd.isna(obj):
+        return None
     return str(obj)
 
 
@@ -42,12 +85,15 @@ def send_to_quarantine(
 
     safe_orphan_id = str(raw_orphan_id) if raw_orphan_id is not None else None
 
+    # Sanitize record to handle NaN values
+    sanitized_record = _sanitize_record(raw_record)
+
     try:
         with get_cursor() as cur:
             cur.execute(sql, (
                 source_file,
                 entity_type,
-                json.dumps(raw_record, default=_json_default),
+                json.dumps(sanitized_record, default=_json_default),
                 error_type,
                 error_details,
                 orphan_type,
@@ -95,10 +141,13 @@ def send_batch_to_quarantine(failed_records: list[dict]) -> int:
     rows = []
     for rec in failed_records:
         raw_orphan_id = rec.get("raw_orphan_id")
+        raw_record = rec.get("raw_record", {})
+        # Sanitize record to handle NaN values
+        sanitized_record = _sanitize_record(raw_record)
         rows.append((
             rec.get("source_file",    "unknown"),
             rec.get("entity_type",    "unknown"),
-            json.dumps(rec.get("raw_record", {}), default=_json_default),
+            json.dumps(sanitized_record, default=_json_default),
             rec.get("error_type",     "unknown"),
             rec.get("error_details",  ""),
             rec.get("orphan_type",    None),
