@@ -16,10 +16,6 @@ sys.path.insert(0, str(Path(__file__).parent.parent))
 from warehouse.connection import init_pool, close_pool
 from config.settings import get_settings
 from utils.logger import configure_logging, get_logger_name
-from utils.file_tracker import (
-    compute_file_hash, is_file_processed, 
-    register_file, mark_file_success, mark_file_failed
-)
 from quality import metrics_tracker as audit_trail
 
 from loaders.dim_static_loader import StaticDimLoader
@@ -67,17 +63,17 @@ class BatchPipeline:
         
         try:
             static_loader = StaticDimLoader(self.batch_dir)
-            customer_loader = DimCustomerLoader()
-            driver_loader = DimDriverLoader()
-            restaurant_loader = DimRestaurantLoader()
-            agent_loader = DimAgentLoader()
+            customer_loader = DimCustomerLoader(self.batch_dir)
+            driver_loader = DimDriverLoader(self.batch_dir)
+            restaurant_loader = DimRestaurantLoader(self.batch_dir)
+            agent_loader = DimAgentLoader(self.batch_dir)
             
             self._load_static_files(static_loader)
             
-            self._load_main_file("customers.csv", lambda f: customer_loader.load(pd.read_csv(f), self.batch_date, f))
-            self._load_main_file("drivers.csv", lambda f: driver_loader.load(pd.read_csv(f), self.batch_date, f))
-            self._load_main_file("restaurants.json", lambda f: restaurant_loader.load(pd.DataFrame(json.load(open(f))), self.batch_date, f))
-            self._load_main_file("agents.csv", lambda f: agent_loader.load(pd.read_csv(f), self.batch_date, f))
+            self._load_main_file("customers.csv", lambda f: customer_loader.load(pd.read_csv(f), self.batch_date, f, self.run_id), "dim_customer")
+            self._load_main_file("drivers.csv", lambda f: driver_loader.load(pd.read_csv(f), self.batch_date, f, self.run_id), "dim_driver")
+            self._load_main_file("restaurants.json", lambda f: restaurant_loader.load(pd.DataFrame(json.load(open(f))), self.batch_date, f, self.run_id), "dim_restaurant")
+            self._load_main_file("agents.csv", lambda f: agent_loader.load(pd.read_csv(f), self.batch_date, f, self.run_id), "dim_agent")
             
             self._track_reference_files()
             
@@ -95,7 +91,16 @@ class BatchPipeline:
             
         except Exception as e:
             logger.error("batch_pipeline_failed", error=str(e))
-            audit_trail.complete_run(run_id=self.run_id, status="failed", error_message=str(e), **self.stats)
+            audit_trail.complete_run(
+                run_id=self.run_id, status="failed",
+                total_files=self.stats["files_processed"],
+                successful_files=self.stats["files_successful"],
+                failed_files=self.stats["files_failed"],
+                total_records=self.stats["records_total"],
+                total_loaded=self.stats["records_loaded"],
+                total_quarantined=0, total_orphaned=0,
+                error_message=str(e),
+            )
             raise
         finally:
             close_pool()
@@ -112,45 +117,65 @@ class BatchPipeline:
             if not os.path.exists(file_path):
                 continue
             
-            file_hash = compute_file_hash(file_path)
-            if is_file_processed(file_path, file_hash):
+            if audit_trail.is_file_processed(file_path):
                 continue
             
-            register_file(self.run_id, file_path, file_hash, "batch")
+            audit_trail.register_file(self.run_id, file_path, "batch")
             self.stats["files_processed"] += 1
             
             try:
                 loaded_count = loader_func()
-                mark_file_success(file_path, file_hash, loaded_count, loaded_count, 0)
+                audit_trail.mark_file_success(file_path, loaded_count, loaded_count, 0)
                 self.stats["files_successful"] += 1
                 self.stats["records_loaded"] += loaded_count
                 self.stats["records_total"] += loaded_count
             except Exception as e:
-                mark_file_failed(file_path, file_hash, str(e))
+                audit_trail.mark_file_failed(file_path, str(e))
                 self.stats["files_failed"] += 1
                 raise
     
-    def _load_main_file(self, filename: str, loader_func: Callable):
+    def _load_main_file(self, filename: str, loader_func: Callable, table_name: str):
         file_path = os.path.join(self.batch_dir, filename)
         if not os.path.exists(file_path):
             return
         
-        file_hash = compute_file_hash(file_path)
-        if is_file_processed(file_path, file_hash):
+        if audit_trail.is_file_processed(file_path):
             return
         
-        register_file(self.run_id, file_path, file_hash, "batch")
+        audit_trail.register_file(self.run_id, file_path, "batch")
         self.stats["files_processed"] += 1
         
         try:
             result = loader_func(file_path)
             records_loaded = result.inserted + result.scd2_updated + result.scd1_updated
-            mark_file_success(file_path, file_hash, result.total_in, records_loaded, 0)
+            audit_trail.mark_file_success(file_path, result.total_in, records_loaded, 0)
+            
+            # Write quality metrics for this file
+            audit_trail.write_quality_metrics(
+                run_id=self.run_id,
+                table_name=table_name,
+                source_file=file_path,
+                total_records=result.total_in,
+                valid_records=records_loaded,
+                quarantined_records=len(result.errors),
+                orphaned_records=0,
+                duplicate_count=0,
+                null_violations=len(result.errors),
+                processing_latency_sec=0.0,
+                quality_details={
+                    "inserted": result.inserted,
+                    "scd2_updated": result.scd2_updated,
+                    "scd1_updated": result.scd1_updated,
+                    "same_day_updated": result.same_day_updated,
+                    "unchanged": result.unchanged,
+                }
+            )
+            
             self.stats["files_successful"] += 1
             self.stats["records_loaded"] += records_loaded
             self.stats["records_total"] += result.total_in
         except Exception as e:
-            mark_file_failed(file_path, file_hash, str(e))
+            audit_trail.mark_file_failed(file_path, str(e))
             self.stats["files_failed"] += 1
             raise
     
@@ -165,12 +190,11 @@ class BatchPipeline:
             if not os.path.exists(file_path):
                 continue
             
-            file_hash = compute_file_hash(file_path)
-            if is_file_processed(file_path, file_hash):
+            if audit_trail.is_file_processed(file_path):
                 continue
             
-            register_file(self.run_id, file_path, file_hash, "reference")
-            mark_file_success(file_path, file_hash, 0, 0, 0)
+            audit_trail.register_file(self.run_id, file_path, "reference")
+            audit_trail.mark_file_success(file_path, 0, 0, 0)
             logger.debug("reference_file_tracked", file=filename)
 
 
