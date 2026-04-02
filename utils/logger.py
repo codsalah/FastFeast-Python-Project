@@ -28,8 +28,11 @@ _LOG_BACKUP_COUNT = 7 # keep 7 days of logs
 
 def configure_logging(log_dir: str = "logs", level: str = "INFO") -> None:
     """ Configure the logging system for the pipeline. """
+    from datetime import datetime
     Path(log_dir).mkdir(parents=True, exist_ok=True)
-    log_file = Path(log_dir) / "pipeline.log"
+    
+    timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+    log_file = Path(log_dir) / f"pipeline_{timestamp}.log"
     numeric_level = getattr(logging, level.upper(), logging.INFO)
     
 
