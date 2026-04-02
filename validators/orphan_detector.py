@@ -1,3 +1,5 @@
+from datetime import datetime, timezone
+
 from warehouse.connection import get_cursor, execute_many
 from utils.retry import db_retry
 from utils.logger import get_logger_name
@@ -125,11 +127,10 @@ def record_orphan_tracking(order_id: str, orphaned_fields: list) -> int:
         return 0
 
     sql = """
-        INSERT INTO pipeline_audit.orphan_staging
-            (record_type, record_id, missing_fk_type, missing_fk_value,
-             source_file, arrived_at, status)
+        INSERT INTO pipeline_audit.orphan_tracking
+            (order_id, orphan_type, raw_id, detected_at)
         VALUES
-            (%s, %s, %s, %s, %s, %s, 'pending')
+            (%s, %s, %s, %s)
         ON CONFLICT DO NOTHING """
     
     # WHY ON CONFLICT DO NOTHING? 
@@ -139,7 +140,7 @@ def record_orphan_tracking(order_id: str, orphaned_fields: list) -> int:
     now = datetime.now(timezone.utc)
 
     # Turn each orphaned field into a tuple of data ready to insert into a database.
-    rows = [ (order_id, o["orphan_type"], o["raw_id"], now) for o in orphaned_fields ]
+    rows = [ (order_id, o["orphan_type"], int(o["raw_id"]), now) for o in orphaned_fields ]
 
     try:
         inserted = execute_many(sql, rows)

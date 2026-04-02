@@ -1,5 +1,6 @@
 import json
 import logging
+import math
 import psycopg2.extras
 
 from warehouse.connection import get_cursor
@@ -7,6 +8,14 @@ from utils.retry import db_retry
 from utils.logger import get_logger_name
 
 logger = get_logger_name(__name__)
+
+
+def _json_default(obj):
+    """Handle NaN and other non-serializable values."""
+    if isinstance(obj, float):
+        if math.isnan(obj) or math.isinf(obj):
+            return None
+    return str(obj)
 
 
 @db_retry
@@ -38,7 +47,7 @@ def send_to_quarantine(
             cur.execute(sql, (
                 source_file,
                 entity_type,
-                json.dumps(raw_record, default=str),
+                json.dumps(raw_record, default=_json_default),
                 error_type,
                 error_details,
                 orphan_type,
@@ -89,7 +98,7 @@ def send_batch_to_quarantine(failed_records: list[dict]) -> int:
         rows.append((
             rec.get("source_file",    "unknown"),
             rec.get("entity_type",    "unknown"),
-            json.dumps(rec.get("raw_record", {}), default=str),
+            json.dumps(rec.get("raw_record", {}), default=_json_default),
             rec.get("error_type",     "unknown"),
             rec.get("error_details",  ""),
             rec.get("orphan_type",    None),

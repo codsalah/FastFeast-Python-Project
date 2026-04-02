@@ -77,7 +77,8 @@ CREATE TABLE IF NOT EXISTS orphan_tracking (
     is_resolved    boolean NOT NULL DEFAULT FALSE,
     retry_count    smallint NOT NULL DEFAULT 0,
     detected_at    timestamp NOT NULL,
-    resolved_at    timestamp
+    resolved_at    timestamp,
+    UNIQUE(order_id, orphan_type)
 );
 
 CREATE TABLE IF NOT EXISTS quarantine (
@@ -92,6 +93,19 @@ CREATE TABLE IF NOT EXISTS quarantine (
     pipeline_run_id integer REFERENCES pipeline_run_log(run_id),
     quarantined_at  timestamp NOT NULL DEFAULT now()
 );
+
+-- Migration: Ensure pipeline_run_id column exists in quarantine (for older schema versions)
+DO $$
+BEGIN
+    IF NOT EXISTS (
+        SELECT 1 FROM information_schema.columns 
+        WHERE table_schema = 'pipeline_audit' 
+        AND table_name = 'quarantine' 
+        AND column_name = 'pipeline_run_id'
+    ) THEN
+        ALTER TABLE pipeline_audit.quarantine ADD COLUMN pipeline_run_id integer REFERENCES pipeline_run_log(run_id);
+    END IF;
+END $$;
 
 CREATE INDEX IF NOT EXISTS idx_file_tracker_run_id      ON pipeline_audit.file_tracker(pipeline_run_id);
 CREATE INDEX IF NOT EXISTS idx_quarantine_run_id         ON pipeline_audit.quarantine(pipeline_run_id);
