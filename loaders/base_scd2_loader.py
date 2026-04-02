@@ -144,19 +144,19 @@ class BaseSCD2Loader(ABC):
                 result.inserted += 1
 
             elif not self._detect_changes(record, active_row):
-                result.unchanged += 1
+                # No tracked changes - check for SCD1 (non-tracked field changes)
+                if self._scd1_condition(record, active_row):
+                    self._apply_scd1(record, active_row)
+                    result.scd1_updated += 1
+                else:
+                    result.unchanged += 1
 
             elif active_row["valid_from"] == batch_date:
                 self._apply_same_day_update(record, active_row)
                 result.same_day_updated += 1
 
-            elif self._scd1_condition(record, active_row):
-                # Only apply SCD1 if no tracked fields changed
-                # SCD1 updates non-tracked fields in-place without creating history
-                self._apply_scd1(record, active_row)
-                result.scd1_updated += 1
-
             else:
+                # SCD2: Tracked fields changed → expire old row, insert new version
                 self._expire_old_row(active_row, batch_date)
                 self._insert_new(record, batch_date)
                 result.scd2_updated += 1
