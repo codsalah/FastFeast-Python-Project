@@ -11,6 +11,7 @@ from typing import Dict, List
 
 import pandas as pd
 from utils.readers import reader
+from utils.retry import db_retry
 from warehouse.connection import get_cursor
 from utils.logger import get_logger_name
 
@@ -141,6 +142,7 @@ class StaticDimLoader:
             return loaded
         return 0
     
+    @db_retry
     def _upsert_channels(self, records: List[dict]) -> int:
         """Upsert using channel_id as PK."""
         sql = """
@@ -156,15 +158,16 @@ class StaticDimLoader:
                 total_rowcount += cur.rowcount
         return total_rowcount
     
+    @db_retry
     def _upsert_priorities(self, records: List[dict]) -> int:
-        """Upsert using (priority_id, valid_from) for SCD2 table."""
+        """Upsert using priority_id as PK (static dimension - no SCD2)."""
         sql = """
             INSERT INTO warehouse.dim_priority 
                 (priority_id, priority_code, priority_name, 
-                sla_first_response_min, sla_resolution_min, valid_from)
+                sla_first_response_min, sla_resolution_min)
             VALUES (%(priority_id)s, %(priority_code)s, %(priority_name)s,
-                    %(sla_first_response_min)s, %(sla_resolution_min)s, current_date)
-            ON CONFLICT (priority_id, valid_from) DO UPDATE SET
+                    %(sla_first_response_min)s, %(sla_resolution_min)s)
+            ON CONFLICT (priority_id) DO UPDATE SET
                 priority_code = EXCLUDED.priority_code,
                 priority_name = EXCLUDED.priority_name,
                 sla_first_response_min = EXCLUDED.sla_first_response_min,
@@ -177,6 +180,7 @@ class StaticDimLoader:
                 total_rowcount += cur.rowcount
         return total_rowcount
     
+    @db_retry
     def _upsert_reasons(self, records: List[dict]) -> int:
         """Upsert using reason_id as PK (no separate reason_key)."""
         sql = """
