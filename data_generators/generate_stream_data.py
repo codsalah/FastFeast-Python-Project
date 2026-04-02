@@ -263,6 +263,7 @@ def generate_orders(base_datetime, hour, batch_data, master_metadata, issue_rate
 
         status = random.choices(["Delivered", "Cancelled", "Refunded"], weights=[0.96, 0.03, 0.01])[0]
 
+        # 111 | --> ()
         # Calculate delivery time based on restaurant prep time and driver on-time rate
         prep = restaurant.get("prep_time_avg_min", 20)
         if pd.isna(prep):
@@ -275,7 +276,7 @@ def generate_orders(base_datetime, hour, batch_data, master_metadata, issue_rate
         delivered_at = created_at + timedelta(minutes=delivery_time) if status == "Delivered" else None
 
         orders.append({
-            "order_id": str(uuid.uuid4()),
+            "order_id": str(uuid.uuid4()), 
             "customer_id": int(customer["customer_id"]),
             "restaurant_id": int(restaurant["restaurant_id"]),
             "driver_id": int(driver["driver_id"]),
