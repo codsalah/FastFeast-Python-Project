@@ -10,27 +10,63 @@ from loaders.dim_customer_loader import DimCustomerLoader
 from loaders.dim_agent_loader import DimAgentLoader
 from loaders.dim_driver_loader import DimDriverLoader
 from loaders.dim_restaurant_loader import DimRestaurantLoader
+from loaders.dim_static_loader import load_static_dimensions
+from utils.logger import get_logger_name
+from utils.logger import configure_logging
+
+logger = get_logger_name(__name__)
+configure_logging()
 
 SIMULATE_DAY_SCRIPT = os.path.join(
     os.path.dirname(os.path.abspath(__file__)),
     "..", "data_generators", "simulate_day.py"
 )
 
+# Possible batch locations (STICK TO ONE PATH)
+# POSSIBLE_BATCH_PATHS = [
+#     "data/input/batch",
+#     "data_generators/data/input/batch",
+#     "scripts/data/input/batch",
+# ]
+
+
+BASE_BATCH_PATH = "data/input/batch"
+
+
+def find_batch_dir(batch_date: str) -> str:
+    batch_dir = os.path.join(BASE_BATCH_PATH, batch_date)
+
+    if os.path.exists(batch_dir):
+        return batch_dir
+
+    logger.error(   
+        "batch_dir_not_found",
+        batch_date=batch_date,
+        attempted_path=batch_dir,
+    )
+
+    return None
+
 
 def invoke_simulate_day(batch_date: date, verbose: bool = False) -> bool:
-    """Run simulate_day.py for the given date with --skip-master."""
     date_str = batch_date.strftime("%Y-%m-%d")
     cmd = [sys.executable, SIMULATE_DAY_SCRIPT, "--date", date_str, "--skip-master"]
+
     if verbose:
         cmd.append("--verbose")
-
-    print(f"\n>>> Invoking simulate_day.py for {date_str} <<<")
+        
+    logger.info("invoke_simulate_day", date=date_str, cmd=cmd)
     result = subprocess.run(cmd, text=True)
-    if result.returncode != 0:
-        print(f"[ERROR] simulate_day.py failed for {date_str}")
-        return False
-    return True
 
+    if result.returncode != 0:
+        logger.error(
+            "simulate_day_failed",
+            date=date_str,
+            return_code=result.returncode,
+        )
+        return False
+    logger.info("simulate_day_success", date=date_str)
+    return True
 
 def verify_all_scd2(start_date: date, num_days: int, invoke: bool = False, verbose: bool = False):
     init_pool(get_settings())
@@ -56,12 +92,31 @@ def verify_all_scd2(start_date: date, num_days: int, invoke: bool = False, verbo
                     print(f"[WARN] Skipping loader run for {date_str} due to simulation failure.")
                     continue
 
+            # FIND THE BATCH DIRECTORY
+            batch_dir = find_batch_dir(date_str)
+            if not batch_dir:
+                print(f"[ERROR] Batch directory not found for {date_str}")
+                print("Searched in:")
+                for base_path in POSSIBLE_BATCH_PATHS:
+                    print(f"  - {os.path.join(base_path, date_str)}")
+                continue
+
+            print(f"Using batch directory: {batch_dir}")
+
+            # LOAD STATIC DIMENSIONS
+            print("\n[STATIC DIMENSIONS]")
+            static_results = load_static_dimensions(batch_dir, run_id=0)  # run_id ignored
+            for table, count in static_results.items():
+                print(f"  {table}: {count} records loaded")
+
+            # LOAD SCD2 DIMENSIONS
+            print("\n[SCD2 DIMENSIONS]")
             for loader in scd2_loaders:
                 entity = loader.table_name.split(".")[-1].replace("dim_", "")
 
                 # restaurants are saved as .json by the batch generator; everything else is .csv
-                csv_path  = f"data/input/batch/{date_str}/{entity}s.csv"
-                json_path = f"data/input/batch/{date_str}/{entity}s.json"
+                csv_path  = os.path.join(batch_dir, f"{entity}s.csv")
+                json_path = os.path.join(batch_dir, f"{entity}s.json")
 
                 if os.path.exists(csv_path):
                     fpath = csv_path
@@ -82,7 +137,6 @@ def verify_all_scd2(start_date: date, num_days: int, invoke: bool = False, verbo
                     f"| SCD2: {res.scd2_updated} | SCD1: {res.scd1_updated} "
                     f"| Unchanged: {res.unchanged}"
                 )
-
 
     finally:
         close_pool()
