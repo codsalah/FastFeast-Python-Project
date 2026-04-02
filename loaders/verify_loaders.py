@@ -96,9 +96,7 @@ def verify_all_scd2(start_date: date, num_days: int, invoke: bool = False, verbo
             batch_dir = find_batch_dir(date_str)
             if not batch_dir:
                 print(f"[ERROR] Batch directory not found for {date_str}")
-                print("Searched in:")
-                for base_path in POSSIBLE_BATCH_PATHS:
-                    print(f"  - {os.path.join(base_path, date_str)}")
+                print(f"Searched in: {BASE_BATCH_PATH}")
                 continue
 
             print(f"Using batch directory: {batch_dir}")
