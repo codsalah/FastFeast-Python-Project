@@ -83,35 +83,24 @@ CREATE TABLE IF NOT EXISTS dim_agent (
 );
 
 CREATE TABLE IF NOT EXISTS dim_reason (
-    reason_key             integer PRIMARY KEY,
-    reason_id              integer UNIQUE NOT NULL,  -- Natural key for static dim
+    reason_id              integer PRIMARY KEY,  -- Natural key as PK (no surrogate)
     reason_name            varchar(256),
     reason_category_name   varchar(100),
     severity_level         smallint,
-    typical_refund_pct     decimal(5,4),
-    UNIQUE (reason_id)
+    typical_refund_pct     decimal(5,4)
 );
 
 CREATE TABLE IF NOT EXISTS dim_channel (
-    channel_key    integer PRIMARY KEY,
-    channel_id     integer UNIQUE NOT NULL,  -- Natural key for static dim
-    channel_name   varchar(50),
-    UNIQUE (channel_id)
+    channel_id     integer PRIMARY KEY,  -- Natural key as PK (no surrogate)
+    channel_name   varchar(50)
 );
 
 CREATE TABLE IF NOT EXISTS dim_priority (
-    -- SCD2: SLA thresholds can change over time; facts should resolve priority_key
-    -- based on the effective version.
-    priority_key             integer PRIMARY KEY,
-    priority_id              integer,  -- Natural key (not unique in SCD2)
+    priority_id              integer PRIMARY KEY,  -- Natural key as PK (no surrogate)
     priority_code            varchar(10),
     priority_name            varchar(50),
-    sla_first_response_min   integer,
-    sla_resolution_min       integer,
-    valid_from               date NOT NULL,
-    valid_to                 date,
-    is_current               boolean NOT NULL DEFAULT TRUE,
-    UNIQUE(priority_id, valid_from)  -- SCD2 unique constraint
+    sla_first_response_min   integer NOT NULL,
+    sla_resolution_min       integer NOT NULL
 );
 
 -- ════════════════════════════════════════════════════════════
@@ -136,9 +125,8 @@ CREATE SEQUENCE IF NOT EXISTS dim_agent_key_seq;
 ALTER SEQUENCE dim_agent_key_seq OWNED BY dim_agent.agent_key;
 ALTER TABLE dim_agent ALTER COLUMN agent_key SET DEFAULT nextval('dim_agent_key_seq');
 
-CREATE SEQUENCE IF NOT EXISTS dim_priority_key_seq;
-ALTER SEQUENCE dim_priority_key_seq OWNED BY dim_priority.priority_key;
-ALTER TABLE dim_priority ALTER COLUMN priority_key SET DEFAULT nextval('dim_priority_key_seq');
+-- Reason and Channel key sequences (for static dims) - REMOVED
+-- Static dimensions now use natural keys as PK directly
 
 
 -- ════════════════════════════════════════════════════════════
@@ -163,6 +151,7 @@ CREATE TABLE IF NOT EXISTS fact_orders (
     delivered_at                 timestamp,
     original_orphan_customer_id  integer,
     original_orphan_driver_id    integer,
+    original_orphan_restaurant_id integer,
     version                      smallint NOT NULL DEFAULT 1,
     is_backfilled                boolean NOT NULL DEFAULT FALSE,
     UNIQUE(order_id, version)
@@ -177,9 +166,9 @@ CREATE TABLE IF NOT EXISTS fact_tickets (
     driver_key                   integer REFERENCES dim_driver(driver_key),
     restaurant_key               integer REFERENCES dim_restaurant(restaurant_key),
     agent_key                    integer NOT NULL REFERENCES dim_agent(agent_key),
-    reason_key                   integer NOT NULL REFERENCES dim_reason(reason_key),
-    priority_key                 integer NOT NULL REFERENCES dim_priority(priority_key),
-    channel_key                  integer NOT NULL REFERENCES dim_channel(channel_key),
+    reason_id                    integer NOT NULL REFERENCES dim_reason(reason_id),
+    priority_id                  integer NOT NULL REFERENCES dim_priority(priority_id),
+    channel_id                   integer NOT NULL REFERENCES dim_channel(channel_id),
     date_key                     integer NOT NULL REFERENCES dim_date(date_key),
     status                       varchar(50) NOT NULL,
     refund_amount                decimal(10,2),
