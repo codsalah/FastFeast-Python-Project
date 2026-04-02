@@ -109,8 +109,31 @@ class BaseSCD2Loader(ABC):
 
                 # Log and filter out bad records
                 for idx in bad_indices:
-                    result.errors.append(f"Row {idx}: schema validation failed")
-                    logger.warning("scd2_record_quarantined", extra={"row_index": idx, "table": self.table_name})
+                    reasons = errors_by_row.get(idx, ["unknown error"])
+                    record_data = df.loc[idx].to_dict()
+                    record_preview = {k: str(v)[:50] for k, v in record_data.items()}
+                    
+                    # Build detailed error message
+                    error_msg = f"QUARANTINE [{self.table_name}] Row {idx}: {' | '.join(reasons)}"
+                    record_json = str(record_preview).replace("'", '"')
+                    
+                    result.errors.append(f"Row {idx}: schema validation failed - {' | '.join(reasons)}")
+                    
+                    # Explicit console output for debugging
+                    print(f"[QUARANTINE] {error_msg}")
+                    print(f"  Record: {record_json}")
+                    print(f"  File: {source_file}")
+                    
+                    logger.warning(
+                        "scd2_record_quarantined",
+                        extra={
+                            "row_index": idx,
+                            "table": self.table_name,
+                            "error_reasons": reasons,
+                            "record_preview": record_preview,
+                            "source_file": source_file,
+                        }
+                    )
 
                 df = df.drop(index=list(bad_indices))
 
