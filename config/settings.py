@@ -13,7 +13,13 @@ from pydantic_settings import BaseSettings, SettingsConfigDict
 class DatabaseConfig(BaseSettings):
     """PostgreSQL connection settings."""
 
-    model_config = SettingsConfigDict(env_prefix="POSTGRES_", extra="ignore")
+    model_config = SettingsConfigDict(
+        env_prefix="POSTGRES_",
+        env_file=".env",
+        env_file_encoding="utf-8",
+        extra="ignore",
+        populate_by_name=True,
+    )
 
     host: str = Field(default="localhost", alias="POSTGRES_HOST")
     port: int = Field(default=5432,        alias="POSTGRES_PORT")
@@ -22,13 +28,6 @@ class DatabaseConfig(BaseSettings):
     password: str = Field(default="fastfeast_pass", alias="POSTGRES_PASSWORD")
     pool_min: int = Field(default=2,  alias="DB_POOL_MIN")
     pool_max: int = Field(default=10, alias="DB_POOL_MAX")
-
-    model_config = SettingsConfigDict(
-        env_file=".env",
-        env_file_encoding="utf-8",
-        extra="ignore",
-        populate_by_name=True,
-    )
 
     @property
     def dsn(self) -> str:
@@ -56,18 +55,16 @@ class DatabaseConfig(BaseSettings):
 class SLAConfig(BaseSettings):
     """SLA breach thresholds."""
 
-    model_config = SettingsConfigDict(env_file=".env", extra="ignore")
-
-    response_threshold_seconds: int   = Field(default=60,   alias="SLA_RESPONSE_THRESHOLD_SECONDS")
-    resolution_threshold_seconds: int = Field(default=900,  alias="SLA_RESOLUTION_THRESHOLD_SECONDS")
-    breach_alert_threshold_pct: float = Field(default=0.10, alias="SLA_BREACH_ALERT_THRESHOLD_PCT")
-
     model_config = SettingsConfigDict(
         env_file=".env",
         env_file_encoding="utf-8",
         extra="ignore",
         populate_by_name=True,
     )
+
+    response_threshold_seconds: int   = Field(default=60,   alias="SLA_RESPONSE_THRESHOLD_SECONDS")
+    resolution_threshold_seconds: int = Field(default=900,  alias="SLA_RESOLUTION_THRESHOLD_SECONDS")
+    breach_alert_threshold_pct: float = Field(default=0.10, alias="SLA_BREACH_ALERT_THRESHOLD_PCT")
 
     @field_validator("breach_alert_threshold_pct")
     @classmethod
@@ -100,7 +97,7 @@ class AlertConfig(BaseSettings):
     report_recipients: Union[str, List[str]] = Field(default_factory=list, alias="REPORT_RECIPIENTS")
 
     orphan_rate_threshold: float = Field(default=0.05, alias="MAX_ORPHAN_RATE")
-    error_rate_threshold: float  = Field(default=0.10, alias="MAX_DUPLICATE_RATE")
+    error_rate_threshold: float  = Field(default=0.10, alias="MAX_ERROR_RATE")
 
     @field_validator("alert_recipients", "report_recipients", mode="before")
     @classmethod
