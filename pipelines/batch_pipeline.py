@@ -36,6 +36,7 @@ class BatchPipeline:
         self.stats = {
             "files_processed": 0, "files_successful": 0, "files_failed": 0,
             "records_loaded": 0, "records_total": 0,
+            "records_quarantined": 0, "records_orphaned": 0,
         }
     
     def find_batch_directory(self) -> Optional[str]:
@@ -85,8 +86,16 @@ class BatchPipeline:
                 failed_files=self.stats["files_failed"],
                 total_records=self.stats["records_total"],
                 total_loaded=self.stats["records_loaded"],
-                total_quarantined=0, total_orphaned=0,
+                total_quarantined=self.stats["records_quarantined"],
+                total_orphaned=self.stats["records_orphaned"],
             )
+
+            # Export quarantine to disk for user review
+            quarantine_file = audit_trail.export_quarantine_to_file(self.run_id)
+            if quarantine_file:
+                logger.info("quarantine_exported_to_disk", path=quarantine_file)
+                print(f"Quarantine records exported to: {quarantine_file}")
+
             return self.stats
             
         except Exception as e:
@@ -98,10 +107,11 @@ class BatchPipeline:
                 failed_files=self.stats["files_failed"],
                 total_records=self.stats["records_total"],
                 total_loaded=self.stats["records_loaded"],
-                total_quarantined=0, total_orphaned=0,
+                total_quarantined=self.stats["records_quarantined"],
+                total_orphaned=self.stats["records_orphaned"],
                 error_message=str(e),
             )
-            raise
+            return self.stats
         finally:
             close_pool()
     
@@ -130,9 +140,9 @@ class BatchPipeline:
                 self.stats["records_loaded"] += loaded_count
                 self.stats["records_total"] += loaded_count
             except Exception as e:
+                logger.error("static_file_load_failed", file=file_path, error=str(e))
                 audit_trail.mark_file_failed(file_path, str(e))
                 self.stats["files_failed"] += 1
-                raise
     
     def _load_main_file(self, filename: str, loader_func: Callable, table_name: str):
         file_path = os.path.join(self.batch_dir, filename)
@@ -174,10 +184,11 @@ class BatchPipeline:
             self.stats["files_successful"] += 1
             self.stats["records_loaded"] += records_loaded
             self.stats["records_total"] += result.total_in
+            self.stats["records_quarantined"] += len(result.errors)
         except Exception as e:
+            logger.error("main_file_load_failed", file=file_path, error=str(e))
             audit_trail.mark_file_failed(file_path, str(e))
             self.stats["files_failed"] += 1
-            raise
     
     def _track_reference_files(self):
         reference_files = [
