@@ -7,10 +7,16 @@ from utils.logger import get_logger_name
 logger = get_logger_name(__name__)
 
 
-def load_dimension_ids() -> dict:
+@db_retry
+def load_dimension_ids() -> dict | None:
     """
     Load current active natural IDs from warehouse dimension tables.
-    Returns a dict of sets keyed by entity type.
+    Returns a dict of sets keyed by entity type, or None if the warehouse
+    is unreachable after all retries.
+
+    Callers MUST check for None before calling detect_orphans —
+    passing None into detect_orphans skips orphan detection for that batch,
+    which is safer than running it against empty sets (false positives).
     """
     dimension_ids = {
         "customer_ids":   set(),
@@ -45,24 +51,33 @@ def load_dimension_ids() -> dict:
                    AND is_current = true""")
             dimension_ids["restaurant_ids"] = {row[0] for row in cur.fetchall()}
 
-        logger.info(
-            "dimension_ids_loaded",
-            customers=len(dimension_ids["customer_ids"]),
-            drivers=len(dimension_ids["driver_ids"]),
-            restaurants=len(dimension_ids["restaurant_ids"]),
-        )
-
     except Exception as e:
         logger.error("dimension_ids_load_failed", error=str(e))
+        return None
+
+    logger.info(
+        "dimension_ids_loaded",
+        customers=len(dimension_ids["customer_ids"]),
+        drivers=len(dimension_ids["driver_ids"]),
+        restaurants=len(dimension_ids["restaurant_ids"]),
+    )
 
     return dimension_ids
 
 
-def detect_orphans(record: dict, dimension_ids: dict) -> dict:
+def detect_orphans(record: dict, dimension_ids: dict | None) -> dict:
     """
     Check a record for unresolvable foreign keys.
     Returns a dict with is_orphan bool and list of orphaned fields.
+
+    If dimension_ids is None (warehouse unavailable), orphan detection is
+    skipped and is_orphan is returned as False — the record is passed through
+    unverified rather than being falsely quarantined.
     """
+    if dimension_ids is None:
+        logger.warning("orphan_detection_skipped", reason="dimension_ids unavailable")
+        return {"is_orphan": False, "orphaned_fields": []}
+
     orphaned_fields = []
 
     ## --- CHECK customer_id ---
@@ -78,7 +93,7 @@ def detect_orphans(record: dict, dimension_ids: dict) -> dict:
     # --- CHECK driver_id ---
     driver_id = record.get("driver_id")
     if driver_id is not None:
-        if driver_id not in dimension_ids.get("driver_ids", set()):
+        if int(driver_id) not in dimension_ids.get("driver_ids", set()):
             orphaned_fields.append({
                 "field":       "driver_id",
                 "raw_id":      driver_id,
@@ -88,7 +103,7 @@ def detect_orphans(record: dict, dimension_ids: dict) -> dict:
     # --- CHECK restaurant_id ---
     restaurant_id = record.get("restaurant_id")
     if restaurant_id is not None:
-        if restaurant_id not in dimension_ids.get("restaurant_ids", set()):
+        if int(restaurant_id) not in dimension_ids.get("restaurant_ids", set()):
             orphaned_fields.append({
                 "field":       "restaurant_id",
                 "raw_id":      restaurant_id,
@@ -131,7 +146,7 @@ def record_orphan_tracking(order_id: str, orphaned_fields: list) -> int:
             (order_id, orphan_type, raw_id, detected_at)
         VALUES
             (%s, %s, %s, %s)
-        ON CONFLICT DO NOTHING """
+        ON CONFLICT (order_id, orphan_type) DO NOTHING"""
     
     # WHY ON CONFLICT DO NOTHING? 
     # duplicate tracking rows not inserted -> [layer 2 of idempotency handling]
@@ -160,6 +175,8 @@ def record_orphan_tracking(order_id: str, orphaned_fields: list) -> int:
         return 0
 
 
-def is_orphan(record: dict, dimension_ids: dict) -> bool:
-    """Returns True if the record has any unresolvable FK."""
+def is_orphan(record: dict, dimension_ids: dict | None) -> bool:
+    """Returns True if the record has any unresolvable FK.
+    Returns False if dimension_ids is None (detection skipped, not failed).
+    """
     return detect_orphans(record, dimension_ids)["is_orphan"]

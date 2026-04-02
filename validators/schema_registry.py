@@ -107,7 +107,8 @@ CITIES = SchemaContract(
     columns=[
         ColumnContract("city_id", "int", nullable=False, min_value=1),
         ColumnContract("city_name", "str", regex=TITLE_CASE_REGEX),
-        ColumnContract("country", "str", allowed_values={"Egypt"}), 
+        ColumnContract("country", "str", allowed_values={"Egypt"}),
+        ColumnContract("timezone", "str"),
     ],
 )
 
@@ -176,8 +177,7 @@ REASONS = SchemaContract(
     source_layer="batch",
     natural_key=["reason_id"],
     columns=[
-        ColumnContract("reason_key", "int", nullable=False, min_value=-1),
-        ColumnContract("reason_id", "int", nullable=True, min_value=-1),
+        ColumnContract("reason_id", "int", nullable=False, min_value=1),
         ColumnContract("reason_name", "str"),
         ColumnContract("reason_category_name", "str", allowed_values={"Delivery", "Food", "Payment"}),
         ColumnContract("severity_level", "int", min_value=1, max_value=5),
@@ -191,8 +191,7 @@ CHANNELS = SchemaContract(
     source_layer="batch",
     natural_key=["channel_id"],
     columns=[
-        ColumnContract("channel_key", "int", nullable=False, min_value=-1),
-        ColumnContract("channel_id", "int", nullable=True, min_value=-1),
+        ColumnContract("channel_id", "int", nullable=False, min_value=1),
         ColumnContract("channel_name", "str", allowed_values={"app", "chat", "phone", "email"}),
     ],
 )
@@ -203,8 +202,7 @@ PRIORITIES = SchemaContract(
     source_layer="batch",
     natural_key=["priority_id"],
     columns=[
-        ColumnContract("priority_key", "int", nullable=False, min_value=-1),
-        ColumnContract("priority_id", "int", nullable=True, min_value=-1),
+        ColumnContract("priority_id", "int", nullable=False, min_value=1),
         ColumnContract("priority_code", "str", allowed_values={"P1", "P2", "P3", "P4"}),
         ColumnContract("priority_name", "str", allowed_values={"Critical", "High", "Medium", "Low"}),
         ColumnContract("sla_first_response_min", "int", min_value=1),
@@ -322,6 +320,7 @@ ORDERS = SchemaContract(
         ColumnContract("delivered_at", "datetime"),
         ColumnContract("original_orphan_customer_id", "int", nullable=True),
         ColumnContract("original_orphan_driver_id", "int", nullable=True),
+        ColumnContract("original_orphan_restaurant_id", "int", nullable=True),
         ColumnContract("version", "int", nullable=False, default_value=1),
         ColumnContract("is_backfilled", "bool", nullable=False, default_value=False),
     ],
@@ -338,24 +337,24 @@ TICKETS = SchemaContract(
         ColumnContract("order_key", "int", nullable=False, min_value=-1),
         ColumnContract("order_id", "str", nullable=False, regex=UUID_REGEX),
         ColumnContract("customer_key", "int", nullable=False, min_value=-1),
-        ColumnContract("driver_key", "int", nullable=True, min_value=-1),
-        ColumnContract("restaurant_key", "int", nullable=True, min_value=-1),
+        ColumnContract("driver_key", "int", nullable=False, min_value=-1),
+        ColumnContract("restaurant_key", "int", nullable=False, min_value=-1),
         ColumnContract("agent_key", "int", nullable=False, min_value=-1),
-        ColumnContract("reason_key", "int", nullable=False, min_value=-1),
-        ColumnContract("priority_key", "int", nullable=False, min_value=-1),
-        ColumnContract("channel_key", "int", nullable=False, min_value=-1),
+        ColumnContract("reason_id", "int", nullable=False, min_value=1),
+        ColumnContract("priority_id", "int", nullable=False, min_value=1),
+        ColumnContract("channel_id", "int", nullable=False, min_value=1),
         ColumnContract("date_key", "int", nullable=False),
         ColumnContract("status", "str", allowed_values={"Resolved", "Closed", "Reopened", "Open", "InProgress"}),
         ColumnContract("refund_amount", "float", min_value=0.0),
-        ColumnContract("sla_first_response_breached", "bool", nullable=True),
-        ColumnContract("sla_resolution_breached", "bool", nullable=True),
+        ColumnContract("sla_first_response_breached", "bool", nullable=False),
+        ColumnContract("sla_resolution_breached", "bool", nullable=False),
         ColumnContract("first_response_minutes", "float", nullable=True),
         ColumnContract("resolution_minutes", "float", nullable=True),
         ColumnContract("created_at", "datetime", nullable=False),
         ColumnContract("first_response_at", "datetime"),
         ColumnContract("resolved_at", "datetime"),
-        ColumnContract("sla_first_due_at", "datetime"),
-        ColumnContract("sla_resolve_due_at", "datetime"),
+        ColumnContract("sla_first_due_at", "datetime", nullable=False),
+        ColumnContract("sla_resolve_due_at", "datetime", nullable=False),
     ],
 )
 
@@ -372,7 +371,7 @@ TICKET_EVENTS = SchemaContract(
         ColumnContract("date_key", "int", nullable=False),
         ColumnContract("old_status", "str", allowed_values={"Open", "InProgress", "Resolved", "Closed", "Reopened"}),
         ColumnContract("new_status", "str", allowed_values={"Open", "InProgress", "Resolved", "Closed", "Reopened"}),
-        ColumnContract("event_timestamp", "datetime", nullable=False),
+        ColumnContract("event_ts", "datetime", nullable=False),
         ColumnContract("notes", "str", nullable=False),
     ],
 )
@@ -476,6 +475,7 @@ QUALITY_METRICS = SchemaContract(
         ColumnContract("orphaned_records", "int", nullable=True),
         ColumnContract("duplicate_count", "int", nullable=True),
         ColumnContract("null_violations", "int", nullable=True),
+        ColumnContract("business_rule_violations", "int", nullable=True),
         ColumnContract("duplicate_rate", "float", nullable=True),
         ColumnContract("orphan_rate", "float", nullable=True),
         ColumnContract("null_rate", "float", nullable=True),
@@ -485,7 +485,6 @@ QUALITY_METRICS = SchemaContract(
         ColumnContract("recorded_at", "datetime", nullable=False),
     ],
 )
-
 
 # ------------------------------------------------------------------------- #
 # ------- Source (Raw) Data Contracts - Precise OLTP Shape ---------------- #
@@ -505,6 +504,8 @@ SOURCE_CUSTOMERS = SchemaContract(
         ColumnContract("segment_id", "int", nullable=False),
         ColumnContract("signup_date", "date"),
         ColumnContract("gender", "str", allowed_values={"male", "female"}),
+        ColumnContract("created_at", "datetime"),
+        ColumnContract("updated_at", "datetime"),
     ],
 )
 
@@ -527,6 +528,8 @@ SOURCE_DRIVERS = SchemaContract(
         ColumnContract("cancel_rate", "float", min_value=0.0, max_value=1.0),
         ColumnContract("completed_deliveries", "int", min_value=0),
         ColumnContract("is_active", "bool"),
+        ColumnContract("created_at", "datetime"),
+        ColumnContract("updated_at", "datetime"),
     ],
 )
 
@@ -576,7 +579,7 @@ SOURCE_CITIES = SchemaContract(
         ColumnContract("city_id", "int", nullable=False),
         ColumnContract("city_name", "str", regex=TITLE_CASE_REGEX),
         ColumnContract("country", "str"),
-        ColumnContract("timezone", "str"),
+        ColumnContract("timezone", "str"),  # Africa/Cairo etc.
     ],
 )
 

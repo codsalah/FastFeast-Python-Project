@@ -46,21 +46,21 @@ class SchemaValidator:
 
         errors: List[ValidationError] = []
 
-        # --------------------------- Stage 1: Structural Integrity ---------------------------
+        # ---------------------- Structural: Missing Required Columns ----------------------
         missing_cols = set(self.contract.required_columns()) - set(df.columns)
         if missing_cols:
             for col in missing_cols:
                 errors.append(ValidationError(-1, col, None, "Structural: Missing required column"))
 
-        # ------------------------- Stage 2 & 3: Field-Level Validations ------------------------
+        # ----------------------- Stage 1 & 2: Field-Level Validations -----------------------
         for col_contract in self.contract.columns:
             if col_contract.name not in df.columns:
                 continue
 
             series = df[col_contract.name]
 
-            # --- Stage 2: Critical Checks (Nullability & Type) ---
-            
+            # --- Stage 1: Critical Checks (Nullability & Type) ---
+
             # 1. Nullability
             if not col_contract.nullable:
                 null_mask = series.isna()
@@ -72,9 +72,9 @@ class SchemaValidator:
             if type_mask is not None and type_mask.any():
                 self._collect_errors(errors, df, col_contract.name, type_mask, f"Critical: Type mismatch (expected {col_contract.dtype})", level="critical")
 
-            # --- Stage 3: Logical Checks (Regex, Ranges, Categorical) ---
+            # --- Stage 2: Logical Checks (Regex, Ranges, Categorical) ---
             
-            # We ONLY perform logical checks on rows that passed Stage 2 (not null & correct type)
+            # We ONLY perform logical checks on rows that passed Stage 1 (not null & correct type)
             valid_for_logical = series.notna()
             if type_mask is not None:
                 valid_for_logical &= ~type_mask
@@ -161,7 +161,11 @@ class SchemaValidator:
         elif expected_dtype == "datetime" or expected_dtype == "date":
             # Attempt vectorized parsing
             return pd.to_datetime(series, errors='coerce').isna() & non_null_mask
-        
+
+        elif expected_dtype == "str":
+            # All values are valid strings; no type conversion needed
+            return None
+
         return None
 
 def validate_entity(df: pd.DataFrame, entity_name: str) -> List[ValidationError]:
