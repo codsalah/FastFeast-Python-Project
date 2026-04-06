@@ -313,7 +313,7 @@ def write_orphan_batch(records: list[dict], orphan_type: str, fk_field: str) -> 
             """
             INSERT INTO pipeline_audit.orphan_tracking
                 (order_id, orphan_type, raw_id,
-                 is_resolved, retry_count, resolved_at)
+                 is_resolved, retry_count, detected_at)
             VALUES %s
             """,
             [(r[0], r[1], r[2], False, 0) for r in rows],
