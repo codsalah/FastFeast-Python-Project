@@ -82,40 +82,6 @@ def _build_dim_maps() -> tuple[dict, dict, dict]:
 
     return ticket_map, agent_map, date_map
 
-@db_retry
-def _track_orphans(df: pd.DataFrame) -> int:
-    """
-    Batch-insert unresolved FK references into pipeline_audit.orphan_tracking.
-    """
-    from datetime import datetime, timezone
-    from warehouse.connection import execute_many
-    
-    now  = datetime.now(timezone.utc)
-    rows = []
-
-    for _, row in df.iterrows():
-        # Using event_id but tracking the parent ticket_id as the orphan
-        tid = str(row["ticket_id"])
-        
-        if row.get("ticket_key") == -1:
-            rows.append((tid, "ticket", tid, now))
-        
-        if row.get("agent_key") == -1:
-            rows.append((tid, "agent", str(row["agent_id"]), now))
-
-    if not rows:
-        return 0
-
-    sql = """
-        INSERT INTO pipeline_audit.orphan_tracking
-            (order_id, orphan_type, raw_id, detected_at)
-        VALUES (%s, %s, %s, %s)
-        ON CONFLICT DO NOTHING
-    """
-    # Note: Using order_id column in orphan_tracking for ticket_id since it's a varchar natural key column
-    return execute_many(sql, rows)
-
-
 # ═══════════════════════════════════════════════════════════════════════════
 #  SURROGATE KEY RESOLUTION
 # ═══════════════════════════════════════════════════════════════════════════
@@ -142,8 +108,7 @@ def _resolve_keys(
 
     for idx, row in df.iterrows():
         ts = pd.to_datetime(row["event_ts"])
-        
-        # ── Date resolution ───────────────────────────────────────────
+
         date_key = date_map.get((ts.date(), ts.hour))
         if date_key is None:
             skip_indices.add(idx)
@@ -153,9 +118,32 @@ def _resolve_keys(
             })
             continue
 
-        # ── Surrogate resolution with orphan support ──────────────────
-        ticket_key = ticket_map.get(str(row["ticket_id"]), -1)
-        agent_key  = agent_map.get(int(row["agent_id"]), -1) if pd.notna(row.get("agent_id")) else -1
+        tid = str(row["ticket_id"])
+        ticket_key = ticket_map.get(tid)
+        if ticket_key is None:
+            skip_indices.add(idx)
+            quarantine_records.append({
+                "idx": idx,
+                "error_details": "ticket_id not found in fact_tickets",
+            })
+            continue
+
+        if pd.isna(row.get("agent_id")):
+            skip_indices.add(idx)
+            quarantine_records.append({
+                "idx": idx,
+                "error_details": "agent_id is required for ticket events",
+            })
+            continue
+
+        agent_key = agent_map.get(int(row["agent_id"]))
+        if agent_key is None:
+            skip_indices.add(idx)
+            quarantine_records.append({
+                "idx": idx,
+                "error_details": "agent_id not found in dim_agent",
+            })
+            continue
 
         ticket_keys.append(ticket_key)
         agent_keys.append(agent_key)
@@ -264,16 +252,14 @@ def load(file_path: str, run_id: int) -> None:
             return
 
         # ── 7. Insert into warehouse ──────────────────────────────────────
-        good = good.rename(columns={"event_ts": "event_timestamp"})
-
         columns = [
             "event_id",
             "ticket_key", "agent_key", "date_key",
             "old_status", "new_status",
-            "event_timestamp",
+            "event_ts",
             "notes",
         ]
-        rows = good[columns].where(good[columns].notna(), other=None).to_dict("records")
+        rows = good[columns].astype(object).where(pd.notnull(good[columns]), None).to_dict("records")
 
         try:
             inserted = execute_values(
@@ -289,10 +275,7 @@ def load(file_path: str, run_id: int) -> None:
             send_alert("db_write_error", f"Insert failed for {file_path}: {e}", run_id)
             return
 
-        # ── 8. Track orphans ──────────────────────────────────────────
-        _track_orphans(good)
-
-        # ── 9. Mark file as done ──────────────────────────────────────────
+        # ── 8. Mark file as done ──────────────────────────────────────────
         quarantined = len(bad) + len(fk_quarantine)
         mark_file_success(file_path, file_hash, total, inserted, quarantined)
 

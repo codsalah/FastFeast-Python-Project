@@ -190,10 +190,10 @@ def _resolve_keys(
             })
             continue
 
-        # ── Inherit FK keys from the matched order row ────────────────────
+        # ── Inherit FK keys from the matched order row (may be -1 for orphans) ──
         customer_key   = order_cust_map.get(order_id_str, -1)
-        driver_key     = order_drv_map.get(order_id_str)   # nullable
-        restaurant_key = order_rest_map.get(order_id_str)  # nullable
+        driver_key     = order_drv_map.get(order_id_str, -1)
+        restaurant_key = order_rest_map.get(order_id_str, -1)
 
         # ── priority_id (direct — dim_priority PK is priority_id in DDL) ────────
         priority_id = int(row["priority_id"]) if pd.notna(row.get("priority_id")) else None
@@ -358,7 +358,7 @@ def load(file_path: str, run_id: int) -> None:
             "created_at", "first_response_at", "resolved_at",
             "sla_first_due_at", "sla_resolve_due_at",
         ]
-        rows = good[columns].where(good[columns].notna(), other=None).to_dict("records")
+        rows = good[columns].astype(object).where(pd.notnull(good[columns]), None).to_dict("records")
 
         try:
             inserted = execute_values(
