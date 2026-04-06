@@ -9,6 +9,7 @@ import numpy as np
 from warehouse.connection import get_cursor
 from utils.retry import db_retry
 from utils.logger import get_logger_name
+from utils.pii_policy import sanitize_record
 
 logger = get_logger_name(__name__)
 
@@ -85,8 +86,8 @@ def send_to_quarantine(
 
     safe_orphan_id = str(raw_orphan_id) if raw_orphan_id is not None else None
 
-    # Sanitize record to handle NaN values
-    sanitized_record = _sanitize_record(raw_record)
+    # PII policy then JSON-safe numeric cleanup for jsonb
+    sanitized_record = _sanitize_record(sanitize_record(entity_type, raw_record or {}))
 
     try:
         with get_cursor() as cur:
@@ -142,8 +143,8 @@ def send_batch_to_quarantine(failed_records: list[dict]) -> int:
     for rec in failed_records:
         raw_orphan_id = rec.get("raw_orphan_id")
         raw_record = rec.get("raw_record", {})
-        # Sanitize record to handle NaN values
-        sanitized_record = _sanitize_record(raw_record)
+        entity_type = rec.get("entity_type", "unknown")
+        sanitized_record = _sanitize_record(sanitize_record(entity_type, raw_record))
         rows.append((
             rec.get("source_file",    "unknown"),
             rec.get("entity_type",    "unknown"),

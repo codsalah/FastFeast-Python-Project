@@ -26,11 +26,27 @@ from utils.logger import get_logger_name, log_alert_fired
 logger = get_logger_name("alerting")
 
 
+class AlertService:
+    """Simple wrapper for sending alerts."""
+
+    def send_alert(self, error_type: str, message: str, run_id: int = None) -> None:
+        """Fire-and-forget async alert. Never blocks the pipeline."""
+        _send_alert_async(error_type, message, run_id)
+
+
 def send_alert(error_type: str, message: str, run_id: int = None) -> None:
     """
     Fire-and-forget async alert.
     Spawns a daemon thread — never blocks the pipeline.
     Only call this on FAILURE, never on success.
+    """
+    _send_alert_async(error_type, message, run_id)
+
+
+def _send_alert_async(error_type: str, message: str, run_id: int = None) -> None:
+    """
+    Fire-and-forget async alert.
+    Spawns a daemon thread — never blocks the pipeline.
     """
     settings = get_settings()
 
@@ -45,13 +61,14 @@ def send_alert(error_type: str, message: str, run_id: int = None) -> None:
     )
     thread.start()
 
+
 def _send_email(error_type: str, message: str, run_id) -> None:
     """
     Internal — runs inside background thread.
     Always logs the alert event first.
     Then attempts email — failure is silent and never crashes the pipeline.
     """
-    settings = get_settings()  
+    settings = get_settings()
 
     log_alert_fired(
         logger,

@@ -18,7 +18,7 @@ from warehouse.connection import init_pool
 from config.settings import get_settings
 from utils.logger import configure_logging
 from quality import metrics_tracker as audit_trail
-import alerting.alert_service as alerting
+from alerting.alert_service import AlertService
 
 BATCH_DIR = "data/input/batch"
 STREAM_DIR = "data/input/stream"
@@ -89,17 +89,19 @@ def main():
 
     run_id = audit_trail.start_run("watcher_test")
     processor = TestProcessor(run_id=run_id)
+    alerter = AlertService()
 
     batch_poller = BatchPoller(
         batch_base_dir=BATCH_DIR,
         processor=processor,
-        alerter=alerting,
+        alerter=alerter,
         poll_interval=BATCH_POLL_INTERVAL
     )
 
     stream_poller = StreamPoller(
         stream_base_dir=STREAM_DIR,
         processor=processor,
+        alerter=alerter,
         poll_interval=STREAM_POLL_INTERVAL
     )
 

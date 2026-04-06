@@ -57,7 +57,7 @@ def get_file_size_bytes(file_path: str) -> int:
 def is_file_processed(file_path: str, file_hash: str) -> bool:
     """
     Return True if this exact file (same path AND same hash) was already
-    successfully processed.
+    handled by the pipeline, either successfully or in a failed attempt.
     """
     # If file doesn't exist, it can't be processed
     if not os.path.exists(file_path):
@@ -73,7 +73,7 @@ def is_file_processed(file_path: str, file_hash: str) -> bool:
             SELECT 1 FROM pipeline_audit.file_tracker
             WHERE file_path = %s
               AND file_hash = %s
-              AND status = 'success'
+              AND status IN ('success', 'failed')
             LIMIT 1
             """,
             (file_path, file_hash)
