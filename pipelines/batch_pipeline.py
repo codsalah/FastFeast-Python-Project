@@ -66,7 +66,8 @@ class BatchPipeline:
             "files_processed":   0,
             "files_successful":  0,
             "files_failed":      0,
-            "records_loaded":    0,
+            "records_loaded":    0,   # passed validation (total - quarantined)
+            "records_changed":   0,   # actually inserted/scd2/scd1 updated this run
             "records_total":     0,
             "records_quarantined": 0,
             "records_orphaned":  0,
@@ -201,7 +202,7 @@ class BatchPipeline:
             total_records=self.stats["records_total"],
             total_loaded=self.stats["records_loaded"],
             total_quarantined=self.stats["records_quarantined"],
-            total_orphaned=self.stats["records_orphaned"],
+            total_orphaned=rstats.get("orphans_marked_resolved", 0),
         )
         self._export_quarantine()
         self._generate_and_email_quality_report()
@@ -240,20 +241,22 @@ class BatchPipeline:
         audit_trail.register_file(self.run_id, file_path, "batch")
         self.stats["files_processed"] += 1
         try:
-            result         = loader_func(file_path)
-            records_loaded = result.inserted + result.scd2_updated + result.scd1_updated
+            result          = loader_func(file_path)
+            records_changed = result.inserted + result.scd2_updated + result.scd1_updated
+            records_valid   = result.total_in - len(result.errors)   # passed validation (incl. unchanged)
 
-            audit_trail.mark_file_success(file_path, result.total_in, records_loaded, 0)
+            audit_trail.mark_file_success(file_path, result.total_in, records_changed, len(result.errors))
             audit_trail.write_quality_metrics(
                 run_id=self.run_id,
                 table_name=table_name,
                 source_file=file_path,
                 total_records=result.total_in,
-                valid_records=records_loaded,
+                valid_records=records_valid,
                 quarantined_records=len(result.errors),
                 orphaned_records=0,
                 duplicate_count=0,
-                null_violations=len(result.errors),
+                null_violations=result.null_violations,
+                business_rule_violations=result.logical_violations,
                 processing_latency_sec=0.0,
                 quality_details={
                     "inserted":         result.inserted,
@@ -264,7 +267,8 @@ class BatchPipeline:
                 },
             )
             self.stats["files_successful"]    += 1
-            self.stats["records_loaded"]      += records_loaded
+            self.stats["records_loaded"]      += records_valid
+            self.stats["records_changed"]     += records_changed
             self.stats["records_total"]       += result.total_in
             self.stats["records_quarantined"] += len(result.errors)
         except Exception as e:
