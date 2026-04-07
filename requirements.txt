@@ -1,0 +1,16 @@
+pandas==2.2.1
+numpy==1.26.4
+psycopg2-binary==2.9.9
+pydantic==2.6.4
+pydantic-settings==2.2.1
+python-dotenv==1.0.1
+structlog==24.1.0
+reportlab==4.4.2
+cryptography==42.0.5
+
+# Analytics & Dashboard
+streamlit==1.32.0
+plotly==5.19.0
+
+# Dev / test
+pytest==8.1.1

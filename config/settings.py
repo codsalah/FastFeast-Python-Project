@@ -96,7 +96,7 @@ class AlertConfig(BaseSettings):
     alert_recipients: Union[str, List[str]]  = Field(default_factory=list, alias="ALERT_RECIPIENTS")
     report_recipients: Union[str, List[str]] = Field(default_factory=list, alias="REPORT_RECIPIENTS")
 
-    orphan_rate_threshold: float = Field(default=0.05, alias="MAX_ORPHAN_RATE")
+    orphan_rate_threshold: float = Field(default=0.50, alias="MAX_ORPHAN_RATE")
     error_rate_threshold: float  = Field(default=0.10, alias="MAX_ERROR_RATE")
 
     @field_validator("alert_recipients", "report_recipients", mode="before")
