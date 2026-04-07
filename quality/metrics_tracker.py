@@ -6,7 +6,7 @@ Tables defined in warehouse/audit_ddl.sql:
     - pipeline_audit.pipeline_run_log
     - pipeline_audit.file_tracker (handled by file_tracker.py)
     - pipeline_audit.quarantine
-    - pipeline_audit.orphan_tracking
+    - pipeline_audit.orphan_tracking (writes via handlers/orphan_handler.py)
     - pipeline_audit.pipeline_quality_metrics
 
 Decisions taken:
@@ -206,50 +206,6 @@ def write_quarantine_batch(
 
 
 @db_retry
-def export_quarantine_to_csv(run_id: int, output_dir: str = "quarantine_exports") -> str:
-    """Fetch all quarantine records for a run and save to a CSV file."""
-    import csv
-    
-    Path(output_dir).mkdir(parents=True, exist_ok=True)
-    filename = f"quarantine_run_{run_id}.csv"
-    file_path = Path(output_dir) / filename
-
-    with get_dict_cursor() as cur:
-        cur.execute("""
-            SELECT 
-                quarantine_id, source_file, entity_type, raw_record, 
-                error_type, error_details, quarantined_at
-            FROM pipeline_audit.quarantine
-            WHERE pipeline_run_id = %s
-        """, (run_id,))
-        rows = cur.fetchall()
-
-    if not rows:
-        return None
-
-    # Write to CSV
-    with open(file_path, "w", newline="", encoding="utf-8") as f:
-        writer = csv.writer(f)
-        # Header
-        writer.writerow(["quarantine_id", "source_file", "entity_type", "raw_record", 
-                         "error_type", "error_details", "quarantined_at"])
-        # Data
-        for row in rows:
-            writer.writerow([
-                row["quarantine_id"],
-                row["source_file"],
-                row["entity_type"],
-                json.dumps(row["raw_record"]) if isinstance(row["raw_record"], dict) else str(row["raw_record"]),
-                row["error_type"],
-                row["error_details"],
-                row["quarantined_at"].isoformat() if row["quarantined_at"] else ""
-            ])
-
-    logger.info("quarantine_exported_csv", run_id=run_id, file=str(file_path), count=len(rows))
-    return str(file_path)
-
-
-@db_retry
 def export_quarantine_to_file(run_id: int, output_dir: str = "quarantine_exports") -> str:
     """Fetch all quarantine records for a run and save to a JSON file."""
     Path(output_dir).mkdir(parents=True, exist_ok=True)
@@ -287,64 +243,6 @@ def export_quarantine_to_file(run_id: int, output_dir: str = "quarantine_exports
 
     logger.info("quarantine_exported", run_id=run_id, file=str(file_path))
     return str(file_path)
-
-
-# ── Orphan tracking ───────────────────────────────────────────────────────────
-
-@db_retry
-def write_orphan_batch(records: list[dict], orphan_type: str, fk_field: str) -> None:
-    """Bulk-insert unresolved FK references into orphan_tracking."""
-    if not records:
-        return
-
-    rows = []
-    for rec in records:
-        order_id = str(rec.get('order_id', rec.get('ticket_id', 'unknown')))
-        raw_id = rec.get(fk_field)
-        if raw_id is not None:
-            rows.append((order_id, orphan_type, int(raw_id)))
-
-    if not rows:
-        return
-
-    with get_cursor() as cur:
-        psycopg2.extras.execute_values(
-            cur,
-            """
-            INSERT INTO pipeline_audit.orphan_tracking
-                (order_id, orphan_type, raw_id,
-                 is_resolved, retry_count, resolved_at)
-            VALUES %s
-            """,
-            [(r[0], r[1], r[2], False, 0) for r in rows],
-            template="(%s, %s, %s, %s, %s, now())",
-        )
-
-    logger.warning("orphan_batch_tracked", count=len(records), orphan_type=orphan_type)
-
-
-@db_retry
-def mark_orphan_resolved(order_id: str, orphan_type: str) -> None:
-    """Flip is_resolved=true and stamp resolved_at."""
-    with get_cursor() as cur:
-        cur.execute("""
-            UPDATE pipeline_audit.orphan_tracking
-            SET is_resolved = true, resolved_at = now()
-            WHERE order_id = %s AND orphan_type = %s AND is_resolved = false
-        """, (order_id, orphan_type))
-
-    logger.info("orphan_resolved", order_id=order_id, orphan_type=orphan_type)
-
-
-@db_retry
-def increment_orphan_retry(order_id: str, orphan_type: str) -> None:
-    """Increment retry_count for an orphan that was attempted but still unresolved."""
-    with get_cursor() as cur:
-        cur.execute("""
-            UPDATE pipeline_audit.orphan_tracking
-            SET retry_count = retry_count + 1
-            WHERE order_id = %s AND orphan_type = %s AND is_resolved = false
-        """, (order_id, orphan_type))
 
 
 # ── Quality metrics ───────────────────────────────────────────────────────────
