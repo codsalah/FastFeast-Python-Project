@@ -382,16 +382,3 @@ def reconcile_orphan_orders(
 def run_reconciliation_after_batch(run_id: int, max_retries: int = DEFAULT_MAX_RETRIES) -> dict[str, int]:
     """Entry point after a batch pipeline run (passes pipeline_run_id for quarantine linkage)."""
     return reconcile_orphan_orders(pipeline_run_id=run_id, max_retries=max_retries)
-
-
-def run_reconciliation(max_retries: int = DEFAULT_MAX_RETRIES) -> None:
-    """
-    Legacy manual reconciliation - DEPRECATED.
-    
-    This function is kept for backward compatibility but should NOT be used.
-    Production batches automatically call run_reconciliation_after_batch.
-    
-    Use automatic reconciliation via: python main.py batch --date YYYY-MM-DD
-    """
-    stats = reconcile_orphan_orders(pipeline_run_id=None, max_retries=max_retries)
-    logger.warning("orphan_reconcile_legacy_manual", **stats)
