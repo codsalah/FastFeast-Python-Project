@@ -12,8 +12,8 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).parent.parent))
 
-import pipelines.stream_pipeline as watcher_module
-from pipelines.stream_pipeline import BatchPoller, StreamPoller
+from pipelines.batch_watcher import BatchPoller
+from pipelines.stream_watcher import StreamPoller
 from warehouse.connection import init_pool
 from config.settings import get_settings
 from utils.logger import configure_logging
@@ -26,15 +26,16 @@ BATCH_POLL_INTERVAL = 10
 STREAM_POLL_INTERVAL = 5
 
 # Override batch window for testing
-watcher_module.BATCH_WINDOW_START = datetime.now().hour
-watcher_module.BATCH_WINDOW_END = min(datetime.now().hour + 8, 23)
+import pipelines.batch_watcher as batch_watcher_module
+batch_watcher_module.BATCH_WINDOW_START = datetime.now().hour
+batch_watcher_module.BATCH_WINDOW_END = min(datetime.now().hour + 8, 23)
 
 #watcher_module.BATCH_WINDOW_END = datetime.now().hour # to cheack alerting for missing batch files
 
 configure_logging(log_dir="logs", level="INFO")
 
 
-class TestProcessor:
+class WatcherHarnessProcessor:
     def __init__(self, run_id: int):
         self.run_id = run_id
         self.batch_count = 0
@@ -88,12 +89,11 @@ def main():
     audit_trail.ensure_audit_schema()
 
     run_id = audit_trail.start_run("watcher_test")
-    processor = TestProcessor(run_id=run_id)
+    processor = WatcherHarnessProcessor(run_id=run_id)
     alerter = AlertService()
 
     batch_poller = BatchPoller(
         batch_base_dir=BATCH_DIR,
-        processor=processor,
         alerter=alerter,
         poll_interval=BATCH_POLL_INTERVAL
     )
