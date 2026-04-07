@@ -119,13 +119,17 @@ def process_single_hour(
             files_found += 1
             processor.process(filepath, "stream")
 
+    totals = audit_trail.get_run_record_totals(run_id)
     audit_trail.complete_run(
         run_id,
         "success",
         files_found,
         processor.processed_count,
         max(0, files_found - processor.processed_count),
-        0, 0, 0, 0,
+        totals["total_records"],
+        totals["total_loaded"],
+        totals["total_quarantined"],
+        totals["total_orphaned"],
     )
     logger.info(
         "stream_one_off_complete",

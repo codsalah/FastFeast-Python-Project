@@ -70,12 +70,17 @@ def run_watcher(
         logger.info("watcher_stopping", reason="KeyboardInterrupt")
         batch_poller.stop()
         stream_poller.stop()
+        totals = audit_trail.get_run_record_totals(run_id)
         audit_trail.complete_run(
             run_id,
             "stopped",
             processor.processed_count,
             processor.processed_count,
-            0, 0, 0, 0, 0,
+            0,
+            totals["total_records"],
+            totals["total_loaded"],
+            totals["total_quarantined"],
+            totals["total_orphaned"],
         )
         if manage_pool:
             close_pool()

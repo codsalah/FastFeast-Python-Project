@@ -260,6 +260,7 @@ def write_quality_metrics(
     null_violations: int,
     processing_latency_sec: float,
     quality_details: dict = None,
+    business_rule_violations: int = 0,
 ) -> None:
     """Insert one quality-metrics row per processed file."""
     safe_total = total_records if total_records > 0 else 1
@@ -278,6 +279,7 @@ def write_quality_metrics(
                  total_records, valid_records,
                  quarantined_records, orphaned_records,
                  duplicate_count, null_violations,
+                 business_rule_violations,
                  duplicate_rate, orphan_rate, null_rate, quarantine_rate,
                  processing_latency_sec, quality_details)
             VALUES
@@ -285,6 +287,7 @@ def write_quality_metrics(
                  %s, %s,
                  %s, %s,
                  %s, %s,
+                 %s,
                  %s, %s, %s, %s,
                  %s, %s::jsonb)
         """, (
@@ -292,6 +295,7 @@ def write_quality_metrics(
             total_records, valid_records,
             quarantined_records, orphaned_records,
             duplicate_count, null_violations,
+            business_rule_violations,
             duplicate_rate, orphan_rate, null_rate, quarantine_rate,
             processing_latency_sec,
             details_json,
@@ -351,3 +355,34 @@ def get_quality_metrics_for_run(run_id: int) -> list[dict]:
     result = [dict(r) for r in rows]
     logger.debug("quality_metrics_fetched", run_id=run_id, count=len(result))
     return result
+
+
+@db_retry
+def get_run_record_totals(run_id: int) -> dict:
+    """
+    Sum record counts from pipeline_quality_metrics for a given run.
+
+    Used by stream_pipeline and watcher to populate pipeline_run_log with
+    accurate totals — individual loaders write to pipeline_quality_metrics
+    directly but never return counts back up to the caller.
+    """
+    with get_dict_cursor() as cur:
+        cur.execute(
+            """
+            SELECT
+                COALESCE(SUM(total_records),       0) AS total_records,
+                COALESCE(SUM(valid_records),        0) AS total_loaded,
+                COALESCE(SUM(quarantined_records),  0) AS total_quarantined,
+                COALESCE(SUM(orphaned_records),     0) AS total_orphaned
+            FROM pipeline_audit.pipeline_quality_metrics
+            WHERE run_id = %s
+            """,
+            (run_id,),
+        )
+        row = cur.fetchone()
+    return dict(row) if row else {
+        "total_records": 0,
+        "total_loaded": 0,
+        "total_quarantined": 0,
+        "total_orphaned": 0,
+    }

@@ -182,8 +182,8 @@ CREATE TABLE IF NOT EXISTS fact_tickets (
     created_at                   timestamp NOT NULL,
     first_response_at            timestamp,
     resolved_at                  timestamp,
-    sla_first_due_at             timestamp NOT NULL,
-    sla_resolve_due_at           timestamp NOT NULL
+    sla_first_due_at             timestamp,
+    sla_resolve_due_at           timestamp
 );
 CREATE UNIQUE INDEX IF NOT EXISTS uq_fact_tickets_ticket_id ON fact_tickets (ticket_id);
 
