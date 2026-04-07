@@ -87,3 +87,14 @@ class Orchestrator:
             run_watcher(settings=self.settings, manage_pool=False)
         finally:
             self._shutdown()
+
+    def setup_analytics(self) -> None:
+        """Create analytics views (OLAP layer) for dashboard."""
+        from analytics import ensure_analytics_schema
+
+        self._startup()
+        try:
+            ensure_analytics_schema()
+            logger.info("analytics_schema_ready")
+        finally:
+            self._shutdown()

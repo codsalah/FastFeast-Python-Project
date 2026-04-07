@@ -10,6 +10,8 @@ Commands:
   batch   --date YYYY-MM-DD            Daily dimension load + orphan reconciliation
   stream  --date YYYY-MM-DD --hour H   One-off stream fact load for one hour
   stream  --watch                      Continuous watcher (batch + stream pollers)
+  analytics setup                      Create analytics views (OLAP layer)
+  analytics dashboard                  Launch Streamlit dashboard
 """
 
 from __future__ import annotations
@@ -49,6 +51,13 @@ def build_parser() -> argparse.ArgumentParser:
     p_stream.add_argument("--hour", type=int, default=None, help="Hour folder 0-23")
     p_stream.add_argument("--watch", action="store_true", help="Run continuous watcher until Ctrl+C")
 
+    p_analytics = sub.add_parser("analytics", help="Analytics setup and dashboard")
+    p_analytics.add_argument(
+        "action", 
+        choices=["setup", "dashboard"],
+        help="setup: create analytics views | dashboard: launch Streamlit"
+    )
+
     return p
 
 
@@ -77,6 +86,19 @@ def main() -> int:
             return 2
         orch.run_stream_hour(args.date, args.hour)
         return 0
+
+    if args.command == "analytics":
+        if args.action == "setup":
+            orch.setup_analytics()
+            print("Analytics views created successfully.")
+            return 0
+        if args.action == "dashboard":
+            import subprocess
+            import os
+            dashboard_path = _ROOT / "analytics" / "dashboard.py"
+            print(f"Launching dashboard at {dashboard_path}...")
+            subprocess.run([sys.executable, "-m", "streamlit", "run", str(dashboard_path)])
+            return 0
 
     return 1
 
