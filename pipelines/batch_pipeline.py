@@ -30,6 +30,8 @@ from loaders.dim_customer_loader import DimCustomerLoader
 from loaders.dim_driver_loader import DimDriverLoader
 from loaders.dim_restaurant_loader import DimRestaurantLoader
 from loaders.dim_static_loader import StaticDimLoader
+from quality.quality_report import generate_daily_quality_report
+from alerting.alert_service import send_report
 from quality import metrics_tracker as audit_trail
 from utils.logger import configure_logging, get_logger_name
 from warehouse.connection import close_pool, init_pool
@@ -153,6 +155,7 @@ class BatchPipeline:
             error_message="batch directory missing; reconciliation_only",
         )
         self._export_quarantine()
+        self._generate_and_email_quality_report()
         return self.stats
 
     # ── private: full dimension load ──────────────────────────────────────────
@@ -164,12 +167,12 @@ class BatchPipeline:
 
         self._load_main_file(
             "customers.csv",
-            lambda f: DimCustomerLoader(self.batch_dir).load(pd.read_csv(f), self.batch_date, f, self.run_id),
+            lambda f: DimCustomerLoader(self.batch_dir).load(pd.read_csv(f, parse_dates=['created_at', 'updated_at']), self.batch_date, f, self.run_id),
             "dim_customer",
         )
         self._load_main_file(
             "drivers.csv",
-            lambda f: DimDriverLoader(self.batch_dir).load(pd.read_csv(f), self.batch_date, f, self.run_id),
+            lambda f: DimDriverLoader(self.batch_dir).load(pd.read_csv(f, parse_dates=['created_at', 'updated_at']), self.batch_date, f, self.run_id),
             "dim_driver",
         )
         self._load_main_file(
@@ -201,6 +204,7 @@ class BatchPipeline:
             total_orphaned=self.stats["records_orphaned"],
         )
         self._export_quarantine()
+        self._generate_and_email_quality_report()
         return self.stats
 
     # ── private: file-level helpers ───────────────────────────────────────────
@@ -282,6 +286,24 @@ class BatchPipeline:
         if qf:
             logger.info("quarantine_exported_to_disk", path=qf)
             print(f"Quarantine records exported to: {qf}")
+
+    def _generate_and_email_quality_report(self) -> None:
+        """
+        Bonus feature from spec: daily PDF quality report + email.
+        Non-blocking: failures only log and never fail the pipeline.
+        """
+        try:
+            artifact = generate_daily_quality_report(self.run_id)
+            send_report(
+                subject=f"[FastFeast] Daily Quality Report — run {self.run_id}",
+                message="Attached: per-file quality metrics and run summary (aggregate only).",
+                pdf_bytes=artifact.pdf_bytes,
+                filename=artifact.filename,
+                run_id=self.run_id,
+            )
+            logger.info("quality_report_generated", file=artifact.filename, bytes=len(artifact.pdf_bytes))
+        except Exception as e:
+            logger.error("quality_report_failed", run_id=self.run_id, error=str(e))
 
 
 # ── direct execution ──────────────────────────────────────────────────────────

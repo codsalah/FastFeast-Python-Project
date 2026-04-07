@@ -20,7 +20,6 @@ import threading
 import time
 from datetime import date, datetime, timedelta
 
-from quality import metrics_tracker as audit_trail
 from utils.file_utils import is_file_stable
 from utils.logger import (
     get_logger_name,
@@ -63,13 +62,11 @@ class BatchPoller:
     def __init__(
         self,
         batch_base_dir: str,
-        processor=None,  # No longer required - batch processing handled internally
         alerter=None,
         poll_interval: int = 60,
     ):
         self.batch_base_dir = batch_base_dir
-        self.processor      = processor       # kept for backward compatibility, but not used
-        self.alerter        = alerter         # must implement .send_alert(...) or None
+        self.alerter        = alerter
         self.poll_interval  = poll_interval
         self.running        = False
         self._thread: threading.Thread | None = None
@@ -168,9 +165,11 @@ class BatchPoller:
                 continue
 
             else:
-                missing = [
+                # Files not yet on disk or still being written (not "unprocessed" in file_tracker)
+                disk_missing = [
                     f for f in BATCH_FILES
-                    if not audit_trail.is_file_processed(os.path.join(batch_dir, f))
+                    if not os.path.exists(os.path.join(batch_dir, f))
+                    or not is_file_stable(os.path.join(batch_dir, f))
                 ]
 
                 if now.hour >= BATCH_WINDOW_END and not alert_sent:
@@ -181,16 +180,16 @@ class BatchPoller:
                         message=f"Past {BATCH_WINDOW_END:02d}:00 and batch still incomplete",
                         stage="file_detection",
                         date=today,
-                        missing=missing,
-                        missing_count=len(missing),
+                        missing=disk_missing,
+                        missing_count=len(disk_missing),
                     )
                     if self.alerter and hasattr(self.alerter, "send_alert"):
                         self.alerter.send_alert(
                             error_type="BATCH_FILES_MISSING",
                             message=(
                                 f"Date: {today}\n"
-                                f"Missing files: {missing}\n"
-                                f"Missing count: {len(missing)}/13"
+                                f"Missing or unstable files: {disk_missing}\n"
+                                f"Count: {len(disk_missing)}/{len(BATCH_FILES)}"
                             ),
                             run_id=None,
                         )
@@ -200,9 +199,9 @@ class BatchPoller:
                 else:
                     logger.debug(
                         "BatchPoller: batch incomplete, still waiting",
-                        processed=len(BATCH_FILES) - len(missing),
+                        ready=len(BATCH_FILES) - len(disk_missing),
                         total=len(BATCH_FILES),
-                        missing=missing,
+                        disk_missing=disk_missing,
                     )
 
                 time.sleep(self.poll_interval)
