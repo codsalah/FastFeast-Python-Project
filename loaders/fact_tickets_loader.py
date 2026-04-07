@@ -40,7 +40,7 @@ from utils.readers import reader
 from utils.retry import db_retry
 from utils.timing import StageTimer
 from validators.schema_registry import get_contract
-from validators.schema_validator import validate_entity
+from validators.schema_validator import partition_critical_validation_rows, validate_entity
 from warehouse.connection import execute_values, get_dict_cursor
 
 logger   = get_logger_name(__name__)
@@ -280,10 +280,14 @@ def load(file_path: str, run_id: int) -> None:
         total = len(df)
 
         # ── 4. Schema validation — quarantine critical failures ───────────
-        errors      = validate_entity(df, "source_tickets")
-        bad_indices = {e.row_index for e in errors if e.level == "critical"}
-        bad         = df.loc[list(bad_indices)] if bad_indices else pd.DataFrame()
-        good        = df.drop(index=list(bad_indices))
+        errors = validate_entity(df, "source_tickets")
+        bad_labels, structural_msg = partition_critical_validation_rows(df, errors)
+        if structural_msg is not None:
+            mark_file_failed(file_path, file_hash, structural_msg)
+            send_alert("schema_validation", f"{file_path}: {structural_msg}", run_id)
+            return
+        bad  = df.loc[bad_labels] if bad_labels else pd.DataFrame()
+        good = df.drop(index=bad_labels) if bad_labels else df.copy()
 
         if not bad.empty:
             errors_by_row: dict = defaultdict(list)
@@ -301,6 +305,7 @@ def load(file_path: str, run_id: int) -> None:
                     "pipeline_run_id": run_id,
                 }
                 for idx, reasons in errors_by_row.items()
+                if idx in bad.index
             ])
             for _, r in bad.iterrows():
                 log_record_rejected(logger, r.to_dict(), reason="schema_validation")

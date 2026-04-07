@@ -28,6 +28,7 @@ from collections import defaultdict
 import pandas as pd
 
 from alerting.alert_service import send_alert
+from config.settings import get_settings
 from handlers.quarantine_handler import send_batch_to_quarantine
 from utils.file_tracker import (
     compute_file_hash,
@@ -46,7 +47,7 @@ from utils.readers import reader
 from utils.retry import db_retry
 from utils.timing import StageTimer
 from validators.schema_registry import get_contract
-from validators.schema_validator import validate_entity
+from validators.schema_validator import partition_critical_validation_rows, validate_entity
 from handlers.orphan_handler import (
     load_orphan_dimension_surrogate_maps,
     resolve_order_dimension_surrogates,
@@ -168,11 +169,14 @@ def load(file_path: str, run_id: int) -> None:
         total = len(df)
 
         # ── 4. Schema validation — quarantine critical failures ───────────
-        errors      = validate_entity(df, "source_orders")
-        bad_indices = {e.row_index for e in errors if e.level == "critical"}
-        valid_indices = [i for i in bad_indices if 0 <= i < len(df)]
-        bad         = df.loc[valid_indices] if valid_indices else pd.DataFrame()
-        good        = df.drop(index=valid_indices) if valid_indices else df.copy()
+        errors = validate_entity(df, "source_orders")
+        bad_labels, structural_msg = partition_critical_validation_rows(df, errors)
+        if structural_msg is not None:
+            mark_file_failed(file_path, file_hash, structural_msg)
+            send_alert("schema_validation", f"{file_path}: {structural_msg}", run_id)
+            return
+        bad  = df.loc[bad_labels] if bad_labels else pd.DataFrame()
+        good = df.drop(index=bad_labels) if bad_labels else df.copy()
 
         if not bad.empty:
             errors_by_row: dict = defaultdict(list)
@@ -190,6 +194,7 @@ def load(file_path: str, run_id: int) -> None:
                     "pipeline_run_id": run_id,
                 }
                 for idx, reasons in errors_by_row.items()
+                if idx in bad.index
             ])
             for _, r in bad.iterrows():
                 log_record_rejected(logger, r.to_dict(), reason="schema_validation")
@@ -229,10 +234,38 @@ def load(file_path: str, run_id: int) -> None:
 
         good["version"]      = 1
         
-        # is_backfilled: FALSE if has orphans (needs v2 later), TRUE if all dims resolved
-        good["is_backfilled"] = good["original_orphan_customer_id"].isna() & \
-                            good["original_orphan_driver_id"].isna() & \
-                            good["original_orphan_restaurant_id"].isna()
+        # Default order_status if null (database requires NOT NULL)
+        good["order_status"] = good["order_status"].fillna("Placed")
+        
+        # is_backfilled: FALSE for all v1 rows (backfill handler sets TRUE for v2 rows)
+        good["is_backfilled"] = False
+
+        # ── Orphan-rate alert (non-blocking) ───────────────────────────────
+        # Rows with at least one unresolved dimension reference (not sum of flags)
+        orphan_mask = (
+            good["original_orphan_customer_id"].notna()
+            | good["original_orphan_driver_id"].notna()
+            | good["original_orphan_restaurant_id"].notna()
+        )
+        orphaned = int(orphan_mask.sum())
+        denom = max(int(len(good)), 1)
+        orphan_rate = orphaned / denom
+        try:
+            threshold = float(get_settings().alert.orphan_rate_threshold)
+        except Exception:
+            threshold = None
+        if threshold is not None and orphan_rate > threshold:
+            send_alert(
+                "high_orphan_rate",
+                (
+                    f"High orphan rate in orders file.\n"
+                    f"File: {file_path}\n"
+                    f"Run: {run_id}\n"
+                    f"Orphaned: {orphaned}/{denom} ({orphan_rate:.2%})\n"
+                    f"Threshold: {threshold:.2%}"
+                ),
+                run_id,
+            )
         # ── 7. Insert into warehouse ──────────────────────────────────────
         columns = [
             "order_id",
