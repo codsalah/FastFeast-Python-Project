@@ -183,9 +183,9 @@ CREATE TABLE IF NOT EXISTS fact_tickets (
     first_response_at            timestamp,
     resolved_at                  timestamp,
     sla_first_due_at             timestamp NOT NULL,
-    sla_resolve_due_at           timestamp NOT NULL,
+    sla_resolve_due_at           timestamp NOT NULL
 );
-CREATE UNIQUE INDEX uq_fact_tickets_ticket_id ON fact_tickets (ticket_id);
+CREATE UNIQUE INDEX IF NOT EXISTS uq_fact_tickets_ticket_id ON fact_tickets (ticket_id);
 
 CREATE TABLE IF NOT EXISTS fact_ticket_events (
     event_key       serial PRIMARY KEY,
@@ -198,7 +198,7 @@ CREATE TABLE IF NOT EXISTS fact_ticket_events (
     event_ts        timestamp NOT NULL,
     notes           text NOT NULL
 );
-CREATE UNIQUE INDEX uq_fact_ticket_events_event_id ON fact_ticket_events (event_id);
+CREATE UNIQUE INDEX IF NOT EXISTS uq_fact_ticket_events_event_id ON fact_ticket_events (event_id);
 
 
 -- ════════════════════════════════════════════════════════════

@@ -95,6 +95,6 @@ CREATE TABLE IF NOT EXISTS quarantine (
 
 CREATE INDEX IF NOT EXISTS idx_file_tracker_run_id       ON pipeline_audit.file_tracker(pipeline_run_id);
 CREATE INDEX IF NOT EXISTS idx_quarantine_run_id         ON pipeline_audit.quarantine(pipeline_run_id);
-CREATE UNIQUE INDEX uq_orphan_tracking_order_type ON pipeline_audit.orphan_tracking(order_id, orphan_type);
+CREATE UNIQUE INDEX IF NOT EXISTS uq_orphan_tracking_order_type ON pipeline_audit.orphan_tracking(order_id, orphan_type);
 CREATE INDEX IF NOT EXISTS idx_quality_metrics_run_id    ON pipeline_audit.pipeline_quality_metrics(run_id);
-CREATE INDEX idx_orphan_tracking_unresolved ON pipeline_audit.orphan_tracking(is_resolved);
+CREATE INDEX IF NOT EXISTS idx_orphan_tracking_unresolved ON pipeline_audit.orphan_tracking(is_resolved);

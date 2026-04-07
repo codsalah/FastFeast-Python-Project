@@ -21,7 +21,16 @@ def load_and_flatten_json(file_path: str) -> pd.DataFrame:
         with open(file_path, 'r') as f:
             data = json.load(f)
 
-        df = pd.json_normalize(data)
+        # If data is a dict with a single key containing an array, extract the array
+        if isinstance(data, dict) and len(data) == 1:
+            key = list(data.keys())[0]
+            if isinstance(data[key], list):
+                df = pd.DataFrame(data[key])
+            else:
+                df = pd.json_normalize(data)
+        else:
+            df = pd.json_normalize(data)
+        
         return df
     except Exception as e:
         return None

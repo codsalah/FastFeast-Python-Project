@@ -3,28 +3,32 @@ loaders/fact_orders_loader.py
 ─────────────────────────────
 Loads micro-batch order records into warehouse.fact_orders.
 
+ORPHAN HANDLING FLOW:
+─────────────────────
+This is the FIRST stage of orphan handling - DETECTION during initial load.
+
+ORPHAN HANDLING:
+  1. DETECTION (this file): FK=-1 for missing dims, store original ID in original_orphan_* columns,
+     track in orphan_tracking table
+  2. RESOLUTION (reconciliation_job + backfill_handler): When dims arrive via batch,
+     create v2 with resolved FKs, keep v1 for audit
+
 Pipeline contract (WAP pattern):
   1. Idempotency check   — skip if file already processed (SHA-256 + file_tracker)
   2. Read + validate     — quarantine schema-invalid records
   3. Deduplicate         — drop exact duplicate order_ids within the file
-  4. Resolve surrogates  — map natural IDs → surrogate keys; -1 for orphans
+  4. Resolve surrogates  — map natural IDs → surrogate keys; -1 for orphans (SEE ORPHAN HANDLING ABOVE)
   5. Insert              — ON CONFLICT (order_id, version) DO NOTHING (layer-2 idempotency)
   6. Track orphans       — batch-insert into pipeline_audit.orphan_tracking
   7. Mark file done      — update file_tracker to 'success'
 
-Orphan handling (orders only — customer / driver / restaurant):
-  - Orphan dimension references → surrogate key set to -1 (Unknown member)
-  - Original natural ID stored in original_orphan_*_id for reconciliation
-  - Orphan rows tracked in pipeline_audit.orphan_tracking (one row per orphan type per order)
-  - ON CONFLICT DO NOTHING on orphan_tracking → safe to re-run
-
 """
 from collections import defaultdict
-from datetime import datetime, timezone
 
 import pandas as pd
 
 from alerting.alert_service import send_alert
+from config.settings import get_settings
 from handlers.quarantine_handler import send_batch_to_quarantine
 from utils.file_tracker import (
     compute_file_hash,
@@ -43,8 +47,13 @@ from utils.readers import reader
 from utils.retry import db_retry
 from utils.timing import StageTimer
 from validators.schema_registry import get_contract
-from validators.schema_validator import validate_entity
-from warehouse.connection import execute_many, execute_values, get_dict_cursor
+from validators.schema_validator import partition_critical_validation_rows, validate_entity
+from handlers.orphan_handler import (
+    load_orphan_dimension_surrogate_maps,
+    resolve_order_dimension_surrogates,
+    track_order_dimension_orphans,
+)
+from warehouse.connection import execute_values, get_dict_cursor
 
 logger   = get_logger_name(__name__)
 CONTRACT = get_contract("source_orders")
@@ -55,49 +64,14 @@ CONTRACT = get_contract("source_orders")
 # ═══════════════════════════════════════════════════════════════════════════
 
 @db_retry
-def _build_dim_maps() -> tuple[dict, dict, dict, dict]:
-    """
-    Load current active natural-ID → surrogate-key mappings from all
-    three orphan dimensions, plus the date map.
-
-    Returns: (cust_map, drv_map, rest_map, date_map)
-
-    None keys are explicitly excluded so that NULL dim rows (the -1 Unknown
-    member) never accidentally match a source record whose ID arrived as None.
-    """
+def _load_dim_date_map() -> dict:
+    """Map (full_date, hour) → date_key for order_created_at resolution (not orphan logic)."""
     with get_dict_cursor() as cur:
-
-        cur.execute("""
-            SELECT customer_id, customer_key
-            FROM warehouse.dim_customer
-            WHERE customer_id IS NOT NULL
-              AND is_current = TRUE
-        """)
-        cust_map = {int(r["customer_id"]): r["customer_key"] for r in cur.fetchall()}
-
-        cur.execute("""
-            SELECT driver_id, driver_key
-            FROM warehouse.dim_driver
-            WHERE driver_id IS NOT NULL
-              AND is_current = TRUE
-        """)
-        drv_map = {int(r["driver_id"]): r["driver_key"] for r in cur.fetchall()}
-
-        cur.execute("""
-            SELECT restaurant_id, restaurant_key
-            FROM warehouse.dim_restaurant
-            WHERE restaurant_id IS NOT NULL
-              AND is_current = TRUE
-        """)
-        rest_map = {int(r["restaurant_id"]): r["restaurant_key"] for r in cur.fetchall()}
-
         cur.execute("""
             SELECT date_key, full_date, hour
             FROM warehouse.dim_date
         """)
-        date_map = {(r["full_date"], r["hour"]): r["date_key"] for r in cur.fetchall()}
-
-    return cust_map, drv_map, rest_map, date_map
+        return {(r["full_date"], r["hour"]): r["date_key"] for r in cur.fetchall()}
 
 
 def _resolve_keys(
@@ -110,9 +84,8 @@ def _resolve_keys(
     """
     Map source natural IDs → surrogate keys for every row in df.
 
-    Orphan rules:
-      - customer / driver / restaurant not found → surrogate key = -1
-      - original natural ID stored in original_orphan_*_id
+    Orphan rules (delegated to resolve_order_dimension_surrogates):
+      - not in map or missing natural → surrogate -1; original_orphan_* holds source id when -1
     date_key=None (timestamp not in dim_date) → row moved to bad_rows for quarantine.
 
     Returns: (good_df, bad_df)
@@ -129,11 +102,7 @@ def _resolve_keys(
         did = int(row["driver_id"])     if pd.notna(row.get("driver_id"))     else None
         rid = int(row["restaurant_id"]) if pd.notna(row.get("restaurant_id")) else None
 
-        ck = cust_map.get(cid, -1)  if cid is not None else -1
-        dk = drv_map.get(did,  -1)  if did is not None else -1
-        rk = rest_map.get(rid, -1)  if rid is not None else -1
-
-        ts       = pd.to_datetime(row["order_created_at"])
+        ts = pd.to_datetime(row["order_created_at"])
         date_key = date_map.get((ts.date(), ts.hour))
 
         # date_key is NOT NULL in DDL — quarantine rows we can't resolve
@@ -141,15 +110,18 @@ def _resolve_keys(
             bad_indices.append(idx)
             continue
 
+        ck, dk, rk, oc, od, orest = resolve_order_dimension_surrogates(
+            cid, did, rid, cust_map, drv_map, rest_map
+        )
+
         customer_keys.append(ck)
         driver_keys.append(dk)
         restaurant_keys.append(rk)
         date_keys.append(date_key)
 
-        # Store original IDs only when the surrogate resolved to -1 (orphan)
-        orphan_cust.append(cid if ck == -1 else None)
-        orphan_drv.append(did  if dk == -1 else None)
-        orphan_rest.append(rid if rk == -1 else None)
+        orphan_cust.append(oc)
+        orphan_drv.append(od)
+        orphan_rest.append(orest)
 
     good = df.drop(index=bad_indices).copy()
     bad  = df.loc[bad_indices].copy()
@@ -164,49 +136,6 @@ def _resolve_keys(
         good["original_orphan_restaurant_id"] = orphan_rest
 
     return good, bad
-
-
-# ═══════════════════════════════════════════════════════════════════════════
-#  ORPHAN AUDIT TRACKING
-# ═══════════════════════════════════════════════════════════════════════════
-
-@db_retry
-def _track_orphans(df: pd.DataFrame) -> int:
-    """
-    Batch-insert unresolved FK references into pipeline_audit.orphan_tracking.
-
-    One row per orphan type per order_id.
-    ON CONFLICT DO NOTHING → idempotent on re-runs.
-    Returns total rows inserted.
-    """
-    now  = datetime.now(timezone.utc)
-    rows = []
-
-    for _, row in df.iterrows():
-        order_id = str(row["order_id"])
-
-        if pd.notna(row.get("original_orphan_customer_id")):
-            rows.append((order_id, "customer", int(row["original_orphan_customer_id"]), now))
-
-        if pd.notna(row.get("original_orphan_driver_id")):
-            rows.append((order_id, "driver", int(row["original_orphan_driver_id"]), now))
-
-        if pd.notna(row.get("original_orphan_restaurant_id")):
-            rows.append((order_id, "restaurant", int(row["original_orphan_restaurant_id"]), now))
-
-    if not rows:
-        return 0
-
-    # ON CONFLICT DO NOTHING — safe to call multiple times for the same order
-    sql = """
-        INSERT INTO pipeline_audit.orphan_tracking
-            (order_id, orphan_type, raw_id, detected_at)
-        VALUES (%s, %s, %s, %s)
-        ON CONFLICT DO NOTHING
-    """
-    inserted = execute_many(sql, rows)
-    logger.debug("orphan_tracking_inserted", count=inserted)
-    return inserted
 
 
 # ═══════════════════════════════════════════════════════════════════════════
@@ -240,10 +169,14 @@ def load(file_path: str, run_id: int) -> None:
         total = len(df)
 
         # ── 4. Schema validation — quarantine critical failures ───────────
-        errors      = validate_entity(df, "source_orders")
-        bad_indices = {e.row_index for e in errors if e.level == "critical"}
-        bad         = df.loc[list(bad_indices)] if bad_indices else pd.DataFrame()
-        good        = df.drop(index=list(bad_indices))
+        errors = validate_entity(df, "source_orders")
+        bad_labels, structural_msg = partition_critical_validation_rows(df, errors)
+        if structural_msg is not None:
+            mark_file_failed(file_path, file_hash, structural_msg)
+            send_alert("schema_validation", f"{file_path}: {structural_msg}", run_id)
+            return
+        bad  = df.loc[bad_labels] if bad_labels else pd.DataFrame()
+        good = df.drop(index=bad_labels) if bad_labels else df.copy()
 
         if not bad.empty:
             errors_by_row: dict = defaultdict(list)
@@ -261,6 +194,7 @@ def load(file_path: str, run_id: int) -> None:
                     "pipeline_run_id": run_id,
                 }
                 for idx, reasons in errors_by_row.items()
+                if idx in bad.index
             ])
             for _, r in bad.iterrows():
                 log_record_rejected(logger, r.to_dict(), reason="schema_validation")
@@ -273,7 +207,8 @@ def load(file_path: str, run_id: int) -> None:
         good = good.drop_duplicates("order_id").copy()
 
         # ── 6. Resolve surrogate keys ─────────────────────────────────────
-        cust_map, drv_map, rest_map, date_map = _build_dim_maps()
+        cust_map, drv_map, rest_map = load_orphan_dimension_surrogate_maps()
+        date_map = _load_dim_date_map()
         good, date_bad = _resolve_keys(good, cust_map, drv_map, rest_map, date_map)
 
         # Quarantine rows whose timestamp had no matching date_key in dim_date
@@ -298,8 +233,39 @@ def load(file_path: str, run_id: int) -> None:
             return
 
         good["version"]      = 1
+        
+        # Default order_status if null (database requires NOT NULL)
+        good["order_status"] = good["order_status"].fillna("Placed")
+        
+        # is_backfilled: FALSE for all v1 rows (backfill handler sets TRUE for v2 rows)
         good["is_backfilled"] = False
 
+        # ── Orphan-rate alert (non-blocking) ───────────────────────────────
+        # Rows with at least one unresolved dimension reference (not sum of flags)
+        orphan_mask = (
+            good["original_orphan_customer_id"].notna()
+            | good["original_orphan_driver_id"].notna()
+            | good["original_orphan_restaurant_id"].notna()
+        )
+        orphaned = int(orphan_mask.sum())
+        denom = max(int(len(good)), 1)
+        orphan_rate = orphaned / denom
+        try:
+            threshold = float(get_settings().alert.orphan_rate_threshold)
+        except Exception:
+            threshold = None
+        if threshold is not None and orphan_rate > threshold:
+            send_alert(
+                "high_orphan_rate",
+                (
+                    f"High orphan rate in orders file.\n"
+                    f"File: {file_path}\n"
+                    f"Run: {run_id}\n"
+                    f"Orphaned: {orphaned}/{denom} ({orphan_rate:.2%})\n"
+                    f"Threshold: {threshold:.2%}"
+                ),
+                run_id,
+            )
         # ── 7. Insert into warehouse ──────────────────────────────────────
         columns = [
             "order_id",
@@ -313,7 +279,8 @@ def load(file_path: str, run_id: int) -> None:
             "original_orphan_restaurant_id",
             "version", "is_backfilled",
         ]
-        rows = good[columns].where(good[columns].notna(), other=None).to_dict("records")
+        # float NaN in nullable int columns must become None for PostgreSQL (avoids "integer out of range")
+        rows = good[columns].astype(object).where(pd.notnull(good[columns]), None).to_dict("records")
 
         try:
             inserted = execute_values(
@@ -330,13 +297,15 @@ def load(file_path: str, run_id: int) -> None:
             return
 
         # ── 8. Track orphan references ────────────────────────────────────
+        # Insert into orphan_tracking (one row per orphan type). 
+        # ON CONFLICT DO NOTHING makes it idempotent.
         orphan_rows = good[
             good["original_orphan_customer_id"].notna()
             | good["original_orphan_driver_id"].notna()
             | good["original_orphan_restaurant_id"].notna()
         ]
         if not orphan_rows.empty:
-            _track_orphans(orphan_rows)
+            track_order_dimension_orphans(orphan_rows)
 
         # ── 9. Mark file as done ──────────────────────────────────────────
         quarantined = len(bad) + len(date_bad)

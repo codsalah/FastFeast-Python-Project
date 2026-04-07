@@ -11,7 +11,8 @@ import pandas as pd
 from handlers.quarantine_handler import send_batch_to_quarantine
 from utils.retry import db_retry
 from utils.timing import timed
-from validators.schema_validator import validate_entity
+from validators.schema_registry import get_contract
+from validators.schema_validator import partition_critical_validation_rows, validate_entity
 from warehouse.connection import get_cursor, get_dict_cursor
 
 logger = logging.getLogger(__name__)
@@ -82,10 +83,32 @@ class BaseSCD2Loader(ABC):
         # Store original count before any filtering
         original_count = len(df)
 
+        # ── Pre-validation: coerce datetime columns to proper type ───────────
+        # CSV sources often read datetime columns as strings; convert them
+        # before schema validation to avoid "Type mismatch (expected datetime)"
+        if self.source_entity:
+            source_contract = get_contract(self.source_entity)
+            datetime_cols = [c.name for c in source_contract.columns if c.dtype in ("datetime", "date")]
+            for col in datetime_cols:
+                if col in df.columns:
+                    df[col] = pd.to_datetime(df[col], errors="coerce", format="mixed")
+
         # ── Schema validation + quarantine (if entity type defined) ─────────
         if self.source_entity:
             errors = validate_entity(df, self.source_entity)
-            bad_indices = {e.row_index for e in errors if e.level == "critical"}
+            bad_indices, structural_msg = partition_critical_validation_rows(df, errors)
+            if structural_msg is not None:
+                logger.error(
+                    "scd2_structural_validation_failed",
+                    extra={
+                        "table": self.table_name,
+                        "source_file": source_file,
+                        "reason": structural_msg,
+                    },
+                )
+                result.errors.append(f"Structural validation failed: {structural_msg}")
+                result.total_in = original_count
+                return result
 
             if bad_indices:
                 # Build quarantine records
@@ -104,6 +127,7 @@ class BaseSCD2Loader(ABC):
                         "pipeline_run_id": pipeline_run_id,
                     }
                     for idx, reasons in errors_by_row.items()
+                    if idx in df.index
                 ]
                 send_batch_to_quarantine(quarantine_records)
 

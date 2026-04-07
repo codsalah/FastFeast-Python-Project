@@ -14,7 +14,7 @@ Decisions:
 
 import pandas as pd
 import numpy as np
-from typing import List, Dict, Any, Optional
+from typing import Any, Dict, List, Optional, Tuple
 from dataclasses import dataclass
 from .schema_registry import SchemaContract, ColumnContract
 
@@ -159,8 +159,10 @@ class SchemaValidator:
             return ~series.isin(allowed_bools) & non_null_mask
             
         elif expected_dtype == "datetime" or expected_dtype == "date":
-            # Attempt vectorized parsing
-            return pd.to_datetime(series, errors='coerce').isna() & non_null_mask
+            # Mixed datetime strings (with/without microseconds) are common in sources.
+            # pandas>=2 may infer a single strict format and coerce valid mixed rows to NaT.
+            parsed = pd.to_datetime(series, errors='coerce', format='mixed')
+            return parsed.isna() & non_null_mask
 
         elif expected_dtype == "str":
             # All values are valid strings; no type conversion needed
@@ -174,3 +176,29 @@ def validate_entity(df: pd.DataFrame, entity_name: str) -> List[ValidationError]
     contract = get_contract(entity_name)
     validator = SchemaValidator(contract)
     return validator.validate(df)
+
+
+def partition_critical_validation_rows(
+    df: pd.DataFrame, errors: List[ValidationError]
+) -> Tuple[Optional[List[Any]], Optional[str]]:
+    """
+    Split critical validation errors into per-row quarantine vs whole-file failure.
+
+    Structural failures (e.g. missing required columns) use row_index=-1 and must not
+    be passed to df.loc / drop, which would mis-handle non-range indices or -1.
+
+    Returns:
+        (row_index_labels, None) — labels to quarantine / drop; empty list if none.
+        (None, message) — file-level failure; caller should mark file failed and exit.
+    """
+    critical = [e for e in errors if e.level == "critical"]
+    if not critical:
+        return [], None
+    if any(e.row_index == -1 for e in critical):
+        msgs = sorted({e.reason for e in critical if e.row_index == -1})
+        return None, "; ".join(msgs) if msgs else critical[0].reason
+    labels = sorted({e.row_index for e in critical if e.row_index in df.index})
+    stray = [e.row_index for e in critical if e.row_index not in df.index]
+    if stray:
+        return None, f"Critical errors reference unknown row labels: {stray[:10]}"
+    return labels, None

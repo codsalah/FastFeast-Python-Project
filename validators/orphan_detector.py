@@ -1,3 +1,14 @@
+"""
+validators/orphan_detector.py
+─────────────────────────────
+OPTIONAL: Read-only orphan detection for validation and CLI tooling.
+
+This module provides STANDALONE orphan detection:
+- Load dimension IDs from warehouse
+- Check if a record has unresolvable FK references
+- Report orphans without writing to database
+"""
+
 from datetime import datetime, timezone
 
 from warehouse.connection import get_cursor, execute_many

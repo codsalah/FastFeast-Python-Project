@@ -40,7 +40,7 @@ from utils.readers import reader
 from utils.retry import db_retry
 from utils.timing import StageTimer
 from validators.schema_registry import get_contract
-from validators.schema_validator import validate_entity
+from validators.schema_validator import partition_critical_validation_rows, validate_entity
 from warehouse.connection import execute_values, get_dict_cursor
 
 logger   = get_logger_name(__name__)
@@ -190,10 +190,10 @@ def _resolve_keys(
             })
             continue
 
-        # ── Inherit FK keys from the matched order row ────────────────────
+        # ── Inherit FK keys from the matched order row (may be -1 for orphans) ──
         customer_key   = order_cust_map.get(order_id_str, -1)
-        driver_key     = order_drv_map.get(order_id_str)   # nullable
-        restaurant_key = order_rest_map.get(order_id_str)  # nullable
+        driver_key     = order_drv_map.get(order_id_str, -1)
+        restaurant_key = order_rest_map.get(order_id_str, -1)
 
         # ── priority_id (direct — dim_priority PK is priority_id in DDL) ────────
         priority_id = int(row["priority_id"]) if pd.notna(row.get("priority_id")) else None
@@ -280,10 +280,14 @@ def load(file_path: str, run_id: int) -> None:
         total = len(df)
 
         # ── 4. Schema validation — quarantine critical failures ───────────
-        errors      = validate_entity(df, "source_tickets")
-        bad_indices = {e.row_index for e in errors if e.level == "critical"}
-        bad         = df.loc[list(bad_indices)] if bad_indices else pd.DataFrame()
-        good        = df.drop(index=list(bad_indices))
+        errors = validate_entity(df, "source_tickets")
+        bad_labels, structural_msg = partition_critical_validation_rows(df, errors)
+        if structural_msg is not None:
+            mark_file_failed(file_path, file_hash, structural_msg)
+            send_alert("schema_validation", f"{file_path}: {structural_msg}", run_id)
+            return
+        bad  = df.loc[bad_labels] if bad_labels else pd.DataFrame()
+        good = df.drop(index=bad_labels) if bad_labels else df.copy()
 
         if not bad.empty:
             errors_by_row: dict = defaultdict(list)
@@ -301,6 +305,7 @@ def load(file_path: str, run_id: int) -> None:
                     "pipeline_run_id": run_id,
                 }
                 for idx, reasons in errors_by_row.items()
+                if idx in bad.index
             ])
             for _, r in bad.iterrows():
                 log_record_rejected(logger, r.to_dict(), reason="schema_validation")
@@ -358,7 +363,7 @@ def load(file_path: str, run_id: int) -> None:
             "created_at", "first_response_at", "resolved_at",
             "sla_first_due_at", "sla_resolve_due_at",
         ]
-        rows = good[columns].where(good[columns].notna(), other=None).to_dict("records")
+        rows = good[columns].astype(object).where(pd.notnull(good[columns]), None).to_dict("records")
 
         try:
             inserted = execute_values(
