@@ -20,16 +20,18 @@ logger = logging.getLogger(__name__)
 
 @dataclass
 class LoadResult:
-    table_name:       str
-    source_file:      str
-    batch_date:       date
-    total_in:         int = 0
-    inserted:         int = 0
-    scd2_updated:     int = 0
-    scd1_updated:     int = 0
-    same_day_updated: int = 0
-    unchanged:        int = 0
-    errors:           list[str] = field(default_factory=list)
+    table_name:              str
+    source_file:             str
+    batch_date:              date
+    total_in:                int = 0
+    inserted:                int = 0
+    scd2_updated:            int = 0
+    scd1_updated:            int = 0
+    same_day_updated:        int = 0
+    unchanged:               int = 0
+    errors:                  list[str] = field(default_factory=list)
+    null_violations:         int = 0   # critical-level validation errors
+    logical_violations:      int = 0   # logical-level validation errors
 
     @property
     def processed_count(self) -> int:
@@ -111,6 +113,10 @@ class BaseSCD2Loader(ABC):
                 return result
 
             if bad_indices:
+                # Count violation types while we still have ValidationError objects
+                result.null_violations    = sum(1 for e in errors if e.level == "critical")
+                result.logical_violations = sum(1 for e in errors if e.level == "logical")
+
                 # Build quarantine records
                 errors_by_row: dict = defaultdict(list)
                 for e in errors:

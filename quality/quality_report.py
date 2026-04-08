@@ -134,7 +134,7 @@ def _render_pdf(
     story.append(Spacer(1, 12))
 
     # 1. Quality metric summary
-    story.extend(_section_quality_metrics_summary(styles, summary, extra))
+    story.extend(_section_quality_metrics_summary(styles, summary, extra, metrics))
     story.append(Spacer(1, 12))
 
     # 2. Validation statistics
@@ -160,19 +160,23 @@ def _render_pdf(
     return buf.getvalue()
 
 
-def _section_quality_metrics_summary(styles, summary: dict[str, Any], extra: dict[str, Any]) -> list:
+def _section_quality_metrics_summary(styles, summary: dict[str, Any], extra: dict[str, Any], metrics: list[dict[str, Any]]) -> list:
     """1. Quality metric summary - Overall pipeline quality metrics."""
     total_records = summary.get("total_records", 0) or 0
     total_quarantined = summary.get("total_quarantined", 0) or 0
     total_orphaned = summary.get("total_orphaned", 0) or 0
-    
+
     reject_rate = (total_quarantined / total_records * 100) if total_records > 0 else 0
     orphan_rate = (total_orphaned / total_records * 100) if total_records > 0 else 0
     referential_integrity = 100 - orphan_rate if total_records > 0 else 100
-    
+
+    # Aggregate duplicate_count from per-file metrics — pipeline_run_log has no duplicate_rate column
+    total_dupes = sum(m.get("duplicate_count", 0) or 0 for m in metrics)
+    duplicate_rate = (total_dupes / total_records * 100) if total_records > 0 else 0
+
     rows = [
         ["Total records processed", f"{total_records:,}"],
-        ["Duplicate rate", f"{summary.get('duplicate_rate', 0) * 100:.2f}%"],
+        ["Duplicate rate", f"{duplicate_rate:.2f}%"],
         ["Orphan rate", f"{orphan_rate:.2f}%"],
         ["Referential integrity rate", f"{referential_integrity:.2f}%"],
         ["Reject/quarantined record count", f"{total_quarantined:,}"],
