@@ -103,7 +103,8 @@ SELECT
         NULLIF(COUNT(*), 0), 2
     ) AS sla_resolution_breach_rate_pct,
     SUM(ft.refund_amount) AS total_refund_amount,
-    COUNT(DISTINCT CASE WHEN ft.refund_amount > 0 THEN ft.ticket_id END) AS tickets_with_refund
+    COUNT(DISTINCT CASE WHEN ft.refund_amount > 0 THEN ft.ticket_id END) AS tickets_with_refund,
+    ROUND(AVG(CASE WHEN ft.refund_amount > 0 THEN ft.refund_amount END)::numeric, 2) AS avg_refund_amount
 FROM warehouse.fact_tickets ft
 ;
 
