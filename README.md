@@ -29,49 +29,49 @@
 ## Architecture Overview
 
 ```
-╔══════════════════════════════════════════════════════════════════════╗
-║  SOURCES (simulated OLTP exports)                                    ║
-║  Batch (daily)               Stream (hourly)                         ║
-║  customers / drivers /       orders / tickets /                      ║
-║  restaurants / agents        ticket events                           ║
+╔════════════════════════════════════════════════════════════════════╗
+║  SOURCES (simulated OLTP exports)                                  ║
+║  Batch (daily)               Stream (hourly)                       ║
+║  customers / drivers /       orders / tickets /                    ║
+║  restaurants / agents        ticket events                         ║
 ╚══════════════╤═══════════════════════════╤═════════════════════════╝
                │                           │
                ▼                           ▼
-      ┌─────────────────┐        ┌──────────────────────┐
-      │  Schema          │        │  Schema               │
-      │  Validator       │        │  Validator            │
-      │  (38 contracts)  │        │  (3 schemas)          │
-      └────────┬────────┘        └──────────┬───────────┘
-               │ quarantine bad             │ quarantine bad
+      ┌─────────────────┐       ┌────────────────────┐
+      │  Schema         │       │  Schema            │
+      │  Validator      │       │  Validator         │
+      │  (38 contracts) │       │  (3 schemas)       │
+      └────────┬────────┘       └──────────┬─────────┘
+               │ quarantine bad            │ quarantine bad
                ▼                           ▼
-      ┌─────────────────┐        ┌──────────────────────┐
-      │  SCD2 Loaders   │        │  Fact Loaders         │
-      │  detect changes │        │  orphan FK → -1       │
-      │  version history│        │  surrogate resolve    │
-      └────────┬────────┘        │  SLA flag calculate   │
-               │                 └──────────┬───────────┘
+      ┌─────────────────┐        ┌─────────────────────┐
+      │  SCD2 Loaders   │        │  Fact Loaders       │
+      │  detect changes │        │  orphan FK → -1     │
+      │  version history│        │  surrogate resolve  │
+      └────────┬────────┘        │  SLA flag calculate │
+               │                 └─────────┬───────────┘
                └────────────┬──────────────┘
                             │
                             ▼
                   ┌─────────────────────┐
-                  │  Reconciliation Job  │◄── auto-runs after batch
-                  │  resolve orphans     │
-                  │  insert v2 fact rows │
+                  │  Reconciliation Job │◄── auto-runs after batch
+                  │  resolve orphans    │
+                  │  insert v2 fact rows│
                   └──────────┬──────────┘
                              │
                              ▼
                   ┌─────────────────────┐
-                  │  PostgreSQL          │
-                  │  Warehouse           │
-                  │  warehouse.*         │
-                  │  pipeline_audit.*    │
+                  │  PostgreSQL         │
+                  │  Warehouse          │
+                  │  warehouse.*        │
+                  │  pipeline_audit.*   │
                   └──────────┬──────────┘
                              │
                              ▼
                   ┌─────────────────────┐
-                  │  Streamlit           │
-                  │  Dashboard           │
-                  │  localhost:8501      │
+                  │  Streamlit          │
+                  │  Dashboard          │
+                  │  localhost:8501     │
                   └─────────────────────┘
 ```
 
