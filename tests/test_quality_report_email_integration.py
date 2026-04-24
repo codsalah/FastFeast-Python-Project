@@ -42,7 +42,7 @@ def test_quality_report_email_integration():
         # 1. Setup audit schema and create test run
         audit.ensure_audit_schema()
 
-        run_id = audit.start_run("integration_test")
+        run_id = audit.start_run("stream")
 
         # Add quality metrics for multiple tables
         audit.write_quality_metrics(

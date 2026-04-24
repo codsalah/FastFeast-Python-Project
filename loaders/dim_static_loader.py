@@ -204,6 +204,6 @@ class StaticDimLoader:
 
 
 def load_static_dimensions(batch_dir: str, run_id: int) -> Dict[str, int]:
-    """Load static dimensions. tracking handled by orchestrator."""
+    """Load static dimensions; file tracking is handled by the batch pipeline."""
     loader = StaticDimLoader(batch_dir)
     return loader.load_all()

@@ -123,7 +123,9 @@ def mark_file_success(
     records_loaded: int,
     records_quarantined: int,
 ) -> None:
-    """Mark a file as successfully processed."""
+    """
+    Mark a file as successfully processed.
+    """
     with get_cursor() as cur:
         cur.execute(
             """
@@ -140,9 +142,13 @@ def mark_file_success(
             (records_total, records_loaded, records_quarantined, file_path, file_hash)
         )
 
-    logger.info("file_success", file=file_path, hash=file_hash[:8],
-                records_total=records_total, records_loaded=records_loaded,
-                records_quarantined=records_quarantined)
+    logger.info(
+        "file_success",
+        file=file_path,
+        hash=file_hash[:8],
+        records_total=records_total,
+        records_quarantined=records_quarantined,
+    )
 
 
 @db_retry

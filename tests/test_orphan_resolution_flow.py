@@ -140,7 +140,7 @@ def test_orphan_resolution_flow():
         
         cur.execute("""
             INSERT INTO pipeline_audit.pipeline_run_log (run_type, run_date, status, started_at)
-            VALUES ('batch1_day1', CURRENT_DATE, 'running', now())
+            VALUES ('stream', CURRENT_DATE, 'running', now())
             RETURNING run_id
         """)
         run_id1 = cur.fetchone()[0]

@@ -35,7 +35,7 @@ def test():
     file_hash = compute_file_hash(file_path)
     print(f"\nFile: {os.path.basename(file_path)}")
     
-    run_id = audit_trail.start_run("test")
+    run_id = audit_trail.start_run("stream")
     
     # Test 1: New file - should NOT be processed yet
     register_file(run_id, file_path, file_hash, "test")

@@ -1,3 +1,4 @@
+# NOTE: This file is currently not used in system flow
 import os
 import sys
 import argparse

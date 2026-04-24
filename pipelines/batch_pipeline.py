@@ -3,7 +3,7 @@ pipelines/batch_pipeline.py
 Daily dimension snapshot load with automatic orphan reconciliation.
 
 Responsibility: load dimension files for a given date, then trigger
-                orphan reconciliation. Nothing about stream or watchers.
+                orphan reconciliation. Stream loads live in stream_pipeline.
 
 Reconciliation flow (fully automatic):
   1. Load dimensions (customers, drivers, restaurants, agents, static data)
@@ -33,17 +33,26 @@ from loaders.dim_static_loader import StaticDimLoader
 from quality.quality_report import generate_daily_quality_report
 from alerting.alert_service import send_report
 from quality import metrics_tracker as audit_trail
-from utils.logger import configure_logging, get_logger_name
+from utils.logger import (
+    configure_logging,
+    get_logger_name,
+)
 from warehouse.connection import close_pool, init_pool
 
 logger = get_logger_name(__name__)
+
+
+def _load_restaurants_from_json(batch_dir: str, file_path: str, batch_date: date, run_id: int):
+    with open(file_path, encoding="utf-8") as fp:
+        df = pd.DataFrame(json.load(fp))
+    return DimRestaurantLoader(batch_dir).load(df, batch_date, file_path, run_id)
 
 
 class BatchPipeline:
     """
     Loads all dimension files for a given date and triggers orphan reconciliation.
 
-    Usage via Orchestrator (pool already owned by caller):
+    Usage when the CLI already opened the pool:
         BatchPipeline(batch_date, settings=settings, manage_pool=False).run()
 
     Standalone usage (manages its own pool):
@@ -76,14 +85,9 @@ class BatchPipeline:
     # ── directory discovery ───────────────────────────────────────────────────
 
     def candidate_batch_directories(self) -> list[str]:
-        """All locations we look for the batch folder (first match wins)."""
+        """Primary batch location for this date."""
         d = str(self.batch_date)
-        return [
-            os.path.normpath(os.path.join(self.settings.batch_input_dir, d)),
-            os.path.normpath(os.path.join("data/input/batch", d)),
-            os.path.normpath(os.path.join("data_generators/data/input/batch", d)),
-            os.path.normpath(os.path.join("scripts/data/input/batch", d)),
-        ]
+        return [os.path.normpath(os.path.join(self.settings.batch_input_dir, d))]
 
     def find_batch_directory(self) -> Optional[str]:
         for path in self.candidate_batch_directories():
@@ -178,7 +182,7 @@ class BatchPipeline:
         )
         self._load_main_file(
             "restaurants.json",
-            lambda f: DimRestaurantLoader(self.batch_dir).load(pd.DataFrame(json.load(open(f))), self.batch_date, f, self.run_id),
+            lambda f: _load_restaurants_from_json(self.batch_dir, f, self.batch_date, self.run_id),
             "dim_restaurant",
         )
         self._load_main_file(
@@ -245,7 +249,7 @@ class BatchPipeline:
             records_changed = result.inserted + result.scd2_updated + result.scd1_updated
             records_valid   = result.total_in - len(result.errors)   # passed validation (incl. unchanged)
 
-            audit_trail.mark_file_success(file_path, result.total_in, records_changed, len(result.errors))
+            audit_trail.mark_file_success(file_path, result.total_in, records_valid, len(result.errors))
             audit_trail.write_quality_metrics(
                 run_id=self.run_id,
                 table_name=table_name,
@@ -300,7 +304,10 @@ class BatchPipeline:
             artifact = generate_daily_quality_report(self.run_id)
             send_report(
                 subject=f"[FastFeast] Daily Quality Report — run {self.run_id}",
-                message="Attached: per-file quality metrics and run summary (aggregate only).",
+                message=(
+                    f"Please find attached the FastFeast daily quality report for run {self.run_id}. "
+                    "It includes aggregate run-level KPIs and per-file audit metrics; no raw records are attached."
+                ),
                 pdf_bytes=artifact.pdf_bytes,
                 filename=artifact.filename,
                 run_id=self.run_id,
@@ -318,7 +325,8 @@ def main() -> None:
     parser.add_argument("--date", type=date.fromisoformat, required=True)
     args = parser.parse_args()
 
-    configure_logging(log_dir="logs", level="INFO")
+    settings = get_settings()
+    configure_logging(log_dir=settings.log_dir, level=settings.log_level)
     stats = BatchPipeline(args.date, manage_pool=True).run()
 
     print(f"\n{'=' * 50}")
