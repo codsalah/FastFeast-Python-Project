@@ -1,5 +1,6 @@
 import pandas as pd
 from loaders.base_scd2_loader import BaseSCD2Loader
+from utils import PII_handler
 
 class DimDriverLoader(BaseSCD2Loader):
     def __init__(self, batch_dir: str = "data/input/batch"):
@@ -25,6 +26,8 @@ class DimDriverLoader(BaseSCD2Loader):
         
         geo = regs.merge(cits, on="city_id")
         df = df.merge(geo, on="region_id", how="left")
+        # PII Masking: driver_name -> first letter + *** (e.g. A. ***)
+        df["driver_name"] = PII_handler.partial_masking(df["driver_name"], keep_first=1)
         return super().load(df, batch_date, source_file, pipeline_run_id)
 
     def _build_insert_row(self, record, batch_date):

@@ -24,8 +24,8 @@ DROP VIEW IF EXISTS warehouse.v_tickets_by_location;
 -- ============================================================
 CREATE OR REPLACE VIEW warehouse.v_tickets_by_location AS
 SELECT 
-    dc.region_name,
-    dc.city_name,
+    COALESCE(dc.region_name, 'Unknown') AS region_name,
+    COALESCE(dc.city_name, 'Unknown') AS city_name,
     COUNT(DISTINCT ft.ticket_id) AS total_tickets,
     SUM(CASE WHEN ft.sla_resolution_breached THEN 1 ELSE 0 END) AS resolution_breaches,
     ROUND(
@@ -36,8 +36,8 @@ SELECT
     SUM(ft.refund_amount) AS total_refund_amount,
     ROUND(AVG(ft.refund_amount), 2) AS avg_refund_amount
 FROM warehouse.fact_tickets ft
-JOIN warehouse.dim_customer dc ON ft.customer_key = dc.customer_key
-GROUP BY dc.region_name, dc.city_name
+LEFT JOIN warehouse.dim_customer dc ON ft.customer_key = dc.customer_key
+GROUP BY COALESCE(dc.region_name, 'Unknown'), COALESCE(dc.city_name, 'Unknown')
 ORDER BY total_tickets DESC;
 
 -- ============================================================
@@ -45,10 +45,10 @@ ORDER BY total_tickets DESC;
 -- ============================================================
 CREATE OR REPLACE VIEW warehouse.v_tickets_by_restaurant AS
 SELECT 
-    dr.restaurant_name,
-    dr.category_name,
-    dr.city_name,
-    dr.region_name,
+    COALESCE(dr.restaurant_name, 'Unknown') AS restaurant_name,
+    COALESCE(dr.category_name, 'Unknown') AS category_name,
+    COALESCE(dr.city_name, 'Unknown') AS city_name,
+    COALESCE(dr.region_name, 'Unknown') AS region_name,
     COUNT(DISTINCT ft.ticket_id) AS total_tickets,
     SUM(CASE WHEN ft.sla_resolution_breached THEN 1 ELSE 0 END) AS resolution_breaches,
     ROUND(
@@ -59,8 +59,9 @@ SELECT
     SUM(ft.refund_amount) AS total_refund_amount,
     ROUND(AVG(ft.refund_amount), 2) AS avg_refund_amount
 FROM warehouse.fact_tickets ft
-JOIN warehouse.dim_restaurant dr ON ft.restaurant_key = dr.restaurant_key
-GROUP BY dr.restaurant_name, dr.category_name, dr.city_name, dr.region_name
+LEFT JOIN warehouse.dim_restaurant dr ON ft.restaurant_key = dr.restaurant_key
+GROUP BY COALESCE(dr.restaurant_name, 'Unknown'), COALESCE(dr.category_name, 'Unknown'),
+         COALESCE(dr.city_name, 'Unknown'), COALESCE(dr.region_name, 'Unknown')
 ORDER BY total_tickets DESC;
 
 -- ============================================================
@@ -68,10 +69,10 @@ ORDER BY total_tickets DESC;
 -- ============================================================
 CREATE OR REPLACE VIEW warehouse.v_tickets_by_driver AS
 SELECT 
-    dd.driver_name,
-    dd.vehicle_type,
-    dd.city_name,
-    dd.region_name,
+    COALESCE(dd.driver_name, 'Unknown') AS driver_name,
+    COALESCE(dd.vehicle_type, 'Unknown') AS vehicle_type,
+    COALESCE(dd.city_name, 'Unknown') AS city_name,
+    COALESCE(dd.region_name, 'Unknown') AS region_name,
     COUNT(DISTINCT ft.ticket_id) AS total_tickets,
     SUM(CASE WHEN ft.sla_resolution_breached THEN 1 ELSE 0 END) AS resolution_breaches,
     ROUND(
@@ -82,8 +83,9 @@ SELECT
     SUM(ft.refund_amount) AS total_refund_amount,
     ROUND(AVG(ft.refund_amount), 2) AS avg_refund_amount
 FROM warehouse.fact_tickets ft
-JOIN warehouse.dim_driver dd ON ft.driver_key = dd.driver_key
-GROUP BY dd.driver_name, dd.vehicle_type, dd.city_name, dd.region_name
+LEFT JOIN warehouse.dim_driver dd ON ft.driver_key = dd.driver_key
+GROUP BY COALESCE(dd.driver_name, 'Unknown'), COALESCE(dd.vehicle_type, 'Unknown'),
+         COALESCE(dd.city_name, 'Unknown'), COALESCE(dd.region_name, 'Unknown')
 ORDER BY total_tickets DESC;
 
 -- ============================================================
@@ -103,7 +105,8 @@ SELECT
         NULLIF(COUNT(*), 0), 2
     ) AS sla_resolution_breach_rate_pct,
     SUM(ft.refund_amount) AS total_refund_amount,
-    COUNT(DISTINCT CASE WHEN ft.refund_amount > 0 THEN ft.ticket_id END) AS tickets_with_refund
+    COUNT(DISTINCT CASE WHEN ft.refund_amount > 0 THEN ft.ticket_id END) AS tickets_with_refund,
+    ROUND(AVG(CASE WHEN ft.refund_amount > 0 THEN ft.refund_amount END)::numeric, 2) AS avg_refund_amount
 FROM warehouse.fact_tickets ft
 ;
 

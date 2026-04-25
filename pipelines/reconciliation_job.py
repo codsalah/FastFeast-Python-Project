@@ -18,7 +18,6 @@ from typing import Any
 
 import pandas as pd
 
-from handlers.backfill_handler import insert_fact_order_backfill_version
 from handlers.orphan_handler import load_orphan_dimension_surrogate_maps
 from handlers.quarantine_handler import send_batch_to_quarantine
 from utils.logger import get_logger_name
@@ -30,6 +29,67 @@ logger = get_logger_name(__name__)
 ORPHAN_TYPES = frozenset({"customer", "driver", "restaurant"})
 DEFAULT_MAX_RETRIES = 3
 MAX_FIXES_PER_ORDER_PER_PASS = 20
+
+
+@db_retry
+def insert_fact_order_backfill_version(
+    fact: dict[str, Any],
+    new_ck: int,
+    new_dk: int,
+    new_rk: int,
+    new_version: int,
+    *,
+    is_backfilled: bool,
+) -> bool:
+    """
+    Insert one new fact_orders row for the same order_id with incremented version.
+
+    Returns True if inserted, False if ON CONFLICT skipped.
+    """
+    new_oc = None if new_ck != -1 else fact.get("original_orphan_customer_id")
+    new_od = None if new_dk != -1 else fact.get("original_orphan_driver_id")
+    new_or = None if new_rk != -1 else fact.get("original_orphan_restaurant_id")
+
+    cols = (
+        "order_id, customer_key, driver_key, restaurant_key, region_id, date_key, "
+        "order_amount, delivery_fee, discount_amount, total_amount, order_status, payment_method, "
+        "order_created_at, delivered_at, original_orphan_customer_id, original_orphan_driver_id, "
+        "original_orphan_restaurant_id, version, is_backfilled"
+    )
+    sql = f"""
+        INSERT INTO warehouse.fact_orders ({cols})
+        VALUES (
+            %s, %s, %s, %s, %s, %s,
+            %s, %s, %s, %s, %s, %s,
+            %s, %s, %s, %s, %s,
+            %s, %s
+        )
+        ON CONFLICT (order_id, version) DO NOTHING
+    """
+    params = (
+        fact["order_id"],
+        new_ck,
+        new_dk,
+        new_rk,
+        fact["region_id"],
+        fact["date_key"],
+        fact["order_amount"],
+        fact["delivery_fee"],
+        fact["discount_amount"],
+        fact["total_amount"],
+        fact["order_status"],
+        fact["payment_method"],
+        fact["order_created_at"],
+        fact["delivered_at"],
+        new_oc,
+        new_od,
+        new_or,
+        new_version,
+        is_backfilled,
+    )
+    with get_cursor() as cur:
+        cur.execute(sql, params)
+        return cur.rowcount > 0
 
 
 def _coerce_int(val: Any) -> int | None:

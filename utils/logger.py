@@ -86,7 +86,7 @@ def get_logger_name(name: str) -> structlog.stdlib.BoundLogger:
 def log_stage_start(log: structlog.stdlib.BoundLogger, stage_name: str, file: str = "", **extra: Any) -> None:
     """ Log the start of a pipeline stage. 
         Call this at the very beginning of a pipeline stage before any work
-        The orchestrator uses the stage+file pair to calculate per-file latency
+        The pipeline runtime uses the stage+file pair to calculate per-file latency
 
     Args:
         log: The logger to use.
@@ -99,7 +99,7 @@ def log_stage_start(log: structlog.stdlib.BoundLogger, stage_name: str, file: st
 def log_stage_complete(log: structlog.stdlib.BoundLogger, stage_name: str, records: int, latency_ms: float, **extra: Any) -> None:
     """ Log the completion of a pipeline stage. 
     Call this at the very end of a pipeline stage after the stage is complete
-    The orchestrator uses the stage+file pair to calculate per-file latency
+    The pipeline runtime uses the stage+file pair to calculate per-file latency
 
     Args:
         log: The logger to use.
@@ -122,7 +122,7 @@ def log_record_rejected(
     ) -> None:
     """ Log a rejected record. 
     Call this when a record is rejected by a stage
-    The orchestrator uses the stage+file pair to calculate per-file latency
+    The pipeline runtime uses the stage+file pair to calculate per-file latency
 
     Args:
         log: The logger to use.
@@ -142,7 +142,7 @@ def log_file_skipped(log: structlog.stdlib.BoundLogger, file: str, reason: str,
                             **extra: Any) -> None:
     """ Log a skipped file. 
     Call this when a file is skipped by a stage
-    The orchestrator uses the stage+file pair to calculate per-file latency
+    The pipeline runtime uses the stage+file pair to calculate per-file latency
 
     Args:
         log: The logger to use.

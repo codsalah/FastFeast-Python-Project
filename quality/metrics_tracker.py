@@ -34,6 +34,9 @@ logger = get_logger_name(__name__)
 
 _DDL_PATH = Path(__file__).resolve().parents[1] / "warehouse" / "audit_ddl.sql"
 
+_VALID_RUN_TYPES = frozenset({"batch", "stream"})
+_VALID_RUN_STATUSES = frozenset({"running", "success", "partial", "failed", "stopped", "no_data"})
+
 
 def ensure_audit_schema() -> None:
     """Create pipeline_audit schema and tables if they don't exist."""
@@ -51,6 +54,8 @@ def ensure_audit_schema() -> None:
 @db_retry
 def start_run(run_type: str) -> int:
     """Open a new pipeline run and return its auto-generated run_id."""
+    if run_type not in _VALID_RUN_TYPES:
+        raise ValueError(f"run_type must be one of {sorted(_VALID_RUN_TYPES)}, got {run_type!r}")
     with get_conn() as conn:
         with conn.cursor() as cur:
             cur.execute("""
@@ -79,6 +84,8 @@ def complete_run(
     error_message: Optional[str] = None,
 ) -> None:
     """Finalise the pipeline_run_log row with aggregate statistics."""
+    if status not in _VALID_RUN_STATUSES:
+        raise ValueError(f"status must be one of {sorted(_VALID_RUN_STATUSES)}, got {status!r}")
     with get_cursor() as cur:
         cur.execute("""
             UPDATE pipeline_audit.pipeline_run_log
@@ -362,7 +369,7 @@ def get_run_record_totals(run_id: int) -> dict:
     """
     Sum record counts from pipeline_quality_metrics for a given run.
 
-    Used by stream_pipeline and watcher to populate pipeline_run_log with
+    Used by stream_pipeline to populate pipeline_run_log with
     accurate totals — individual loaders write to pipeline_quality_metrics
     directly but never return counts back up to the caller.
     """
@@ -385,4 +392,27 @@ def get_run_record_totals(run_id: int) -> dict:
         "total_loaded": 0,
         "total_quarantined": 0,
         "total_orphaned": 0,
+    }
+
+
+@db_retry
+def get_run_file_totals(run_id: int) -> dict:
+    """Return file counts by status for a run from file_tracker."""
+    with get_dict_cursor() as cur:
+        cur.execute(
+            """
+            SELECT
+                COUNT(*) AS total_files,
+                COALESCE(SUM(CASE WHEN status = 'success' THEN 1 ELSE 0 END), 0) AS successful_files,
+                COALESCE(SUM(CASE WHEN status = 'failed' THEN 1 ELSE 0 END), 0) AS failed_files
+            FROM pipeline_audit.file_tracker
+            WHERE pipeline_run_id = %s
+            """,
+            (run_id,),
+        )
+        row = cur.fetchone()
+    return dict(row) if row else {
+        "total_files": 0,
+        "successful_files": 0,
+        "failed_files": 0,
     }

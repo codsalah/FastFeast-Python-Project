@@ -24,7 +24,7 @@ class AnalyticsClient:
     def __init__(self):
         self.schema = "warehouse"
         # Allow the client to be used from one-off scripts/tests.
-        # The main app (Orchestrator / dashboard) initializes the pool already.
+        # The main app or dashboard initializes the pool already.
         try:
             from warehouse.connection import get_conn
             with get_conn():
@@ -193,7 +193,7 @@ def ensure_analytics_schema() -> None:
     
     ddl = ddl_path.read_text(encoding="utf-8")
     # Allow running this function in isolation (e.g. from CLI snippets).
-    # Orchestrator / dashboard already initialize the pool.
+    # main.py or dashboard already initialize the pool.
     try:
         with get_conn():
             pass

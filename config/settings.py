@@ -158,6 +158,27 @@ class Settings(BaseSettings):
     poll_interval_seconds: int = Field(default=30,    alias="POLL_INTERVAL_SECONDS")
     batch_chunk_size: int      = Field(default=10000, alias="BATCH_CHUNK_SIZE")
     max_threads: int           = Field(default=4,     alias="MAX_THREADS")
+    log_level: str             = Field(default="INFO", alias="LOG_LEVEL")
+
+    # Watcher scheduling
+    stream_poll_seconds: int = Field(default=30, alias="STREAM_POLL_SECONDS")
+    batch_poll_seconds: int = Field(default=30, alias="BATCH_POLL_SECONDS")
+    batch_window_start_hour: int = Field(default=23, alias="BATCH_WINDOW_START_HOUR")
+    batch_window_end_hour: int = Field(default=1, alias="BATCH_WINDOW_END_HOUR")
+    batch_required_files: Union[str, List[str]] = Field(
+        default=(
+            "customers.csv,drivers.csv,agents.csv,regions.csv,reasons.csv,categories.csv,"
+            "segments.csv,teams.csv,channels.csv,priorities.csv,reason_categories.csv,"
+            "restaurants.json,cities.json"
+        ),
+        alias="BATCH_REQUIRED_FILES",
+    )
+
+    # Warehouse/runtime defaults
+    date_dim_start_year: int = Field(default=2020, alias="DATE_DIM_START_YEAR")
+    date_dim_end_year: int = Field(default=2030, alias="DATE_DIM_END_YEAR")
+    db_connect_timeout_sec: int = Field(default=10, alias="DB_CONNECT_TIMEOUT_SEC")
+    db_statement_timeout_ms: int = Field(default=240000, alias="DB_STATEMENT_TIMEOUT_MS")
 
     #  PII 
     pii_hash_pepper: str = Field(alias="PII_HASH_PEPPER")
@@ -179,6 +200,20 @@ class Settings(BaseSettings):
                 "PII_HASH_PEPPER must be set to a real secret (min 16 chars). "
                 "Generate one with: python -c \"import secrets; print(secrets.token_hex(32))\""
             )
+        return v
+
+    @field_validator("batch_required_files", mode="before")
+    @classmethod
+    def parse_batch_required_files(cls, v):
+        if isinstance(v, str):
+            return [item.strip() for item in v.split(",") if item.strip()]
+        return v
+
+    @field_validator("batch_window_start_hour", "batch_window_end_hour")
+    @classmethod
+    def hour_in_range(cls, v: int) -> int:
+        if not (0 <= v <= 23):
+            raise ValueError(f"hour must be in [0, 23], got {v}")
         return v
 
     def ensure_directories(self) -> None:

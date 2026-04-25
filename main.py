@@ -3,7 +3,7 @@
 FastFeast — single CLI entrypoint.
 
 Flow:
-  config (.env) → Orchestrator → DB pool + DDL → pipeline
+  config (.env) → config.runtime (pool + inline DDL bootstrap) → pipelines
 
 Commands:
   init-db                              Apply DDL, dim_date, optional seed
@@ -21,12 +21,77 @@ import sys
 from datetime import date
 from pathlib import Path
 
+from warehouse.connection import get_conn
+
 _ROOT = Path(__file__).resolve().parent
 if str(_ROOT) not in sys.path:
     sys.path.insert(0, str(_ROOT))
 
-from config.orchestrator import Orchestrator
-from config.settings import get_settings
+from analytics import ensure_analytics_schema
+from config.settings import Settings, get_settings
+from loaders.dim_date_loader import load_dim_date
+from pipelines.batch_pipeline import BatchPipeline
+from pipelines.stream_pipeline import process_single_hour
+from pipelines.watcher import run_continuous_watch
+from utils.logger import configure_logging, get_logger_name
+from warehouse.connection import close_pool, health_check, init_pool
+
+logger = get_logger_name(__name__)
+
+
+def _apply_sql_file(path: Path) -> None:
+    """Execute SQL file directly on database."""
+    if not path.exists():
+        logger.warning("ddl_missing", path=str(path))
+        return
+    ddl = path.read_text(encoding="utf-8")
+    with get_conn() as conn:
+        conn.autocommit = True
+        with conn.cursor() as cur:
+            cur.execute(ddl)
+    logger.info("schema_applied", name=path.stem, path=str(path))
+
+
+def apply_audit_ddl(settings: Settings) -> None:
+    """Apply audit schema DDL."""
+    _apply_sql_file(Path("warehouse/audit_ddl.sql"))
+
+
+def ensure_warehouse_schema(*, with_seed: bool = False) -> None:
+    """Apply warehouse DDL and optionally seed data."""
+    _apply_sql_file(Path("warehouse/dwh_ddl.sql"))
+    if with_seed:
+        _apply_sql_file(Path("warehouse/seed.sql"))
+
+
+def init_database(settings: Settings, *, with_seed: bool = False) -> None:
+    """Apply audit + warehouse DDL, optional seed, dim_date; then close the pool."""
+    configure_logging(log_dir=settings.log_dir, level=settings.log_level)
+    settings.ensure_directories()
+    init_pool(settings)
+    try:
+        apply_audit_ddl(settings)
+        ensure_warehouse_schema(with_seed=with_seed)
+        load_dim_date(
+            start_year=settings.date_dim_start_year,
+            end_year=settings.date_dim_end_year,
+        )
+    finally:
+        close_pool()
+
+
+def pipeline_startup(settings: Settings) -> None:
+    """Logging, directories, pool, health check, base schema (no seed)."""
+    configure_logging(log_dir=settings.log_dir, level=settings.log_level)
+    settings.ensure_directories()
+    init_pool(settings)
+    if not health_check():
+        raise RuntimeError("Database health check failed")
+    ensure_warehouse_schema(with_seed=False)
+
+
+def pipeline_shutdown() -> None:
+    close_pool()
 
 
 def build_parser() -> argparse.ArgumentParser:
@@ -64,19 +129,26 @@ def build_parser() -> argparse.ArgumentParser:
 def main() -> int:
     args     = build_parser().parse_args()
     settings = get_settings()
-    orch     = Orchestrator(settings)
 
     if args.command == "init-db":
-        orch.init_db(with_seed=args.with_seed)
+        init_database(settings, with_seed=args.with_seed)
         return 0
 
     if args.command == "batch":
-        orch.run_batch(batch_date=args.date)
+        pipeline_startup(settings)
+        try:
+            BatchPipeline(args.date, settings=settings, manage_pool=False).run()
+        finally:
+            pipeline_shutdown()
         return 0
 
     if args.command == "stream":
         if args.watch or (args.date is None and args.hour is None):
-            orch.run_stream_watch()
+            pipeline_startup(settings)
+            try:
+                run_continuous_watch(settings=settings, manage_pool=False)
+            finally:
+                pipeline_shutdown()
             return 0
         if args.date is None or args.hour is None:
             print("Error: provide both --date and --hour, or use --watch.")
@@ -84,12 +156,21 @@ def main() -> int:
         if not (0 <= args.hour <= 23):
             print("Error: --hour must be 0-23.")
             return 2
-        orch.run_stream_hour(args.date, args.hour)
+        pipeline_startup(settings)
+        try:
+            process_single_hour(args.date, args.hour, settings=settings, manage_pool=False)
+        finally:
+            pipeline_shutdown()
         return 0
 
     if args.command == "analytics":
         if args.action == "setup":
-            orch.setup_analytics()
+            pipeline_startup(settings)
+            try:
+                ensure_analytics_schema()
+                logger.info("analytics_schema_ready")
+            finally:
+                pipeline_shutdown()
             print("Analytics views created successfully.")
             return 0
         if args.action == "dashboard":

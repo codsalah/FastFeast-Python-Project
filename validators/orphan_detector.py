@@ -1,3 +1,4 @@
+# NOT USED IN PROJECT - SAFE TO REMOVE
 """
 validators/orphan_detector.py
 ─────────────────────────────
