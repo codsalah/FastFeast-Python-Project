@@ -135,55 +135,62 @@ Environment variable naming follows the pattern:
 
 ```mermaid
 graph TB
-    subgraph "Configuration Sources"
-        ENV[.env File]
-        EV[Environment Variables]
-        DF[Default Values]
+
+    subgraph Configuration_Sources
+        ENV[".env File"]
+        EV["Environment Variables"]
+        DF["Default Values"]
     end
 
-    subgraph "Configuration Layer"
-        subgraph "Pydantic Settings"
-            BS[BaseSettings]
-            PS[pydantic_settings]
+    subgraph Configuration_Layer
+
+        subgraph Pydantic_Settings
+            BS["BaseSettings"]
+            PS["pydantic_settings"]
         end
-        subgraph "Config Classes"
-            DC[DatabaseConfig]
-            SC[SLAConfig]
-            AC[AlertConfig]
-            QC[QualityThresholdConfig]
-            TS[Top-level Settings]
+
+        subgraph Config_Classes
+            DC["DatabaseConfig"]
+            SC["SLAConfig"]
+            AC["AlertConfig"]
+            QC["QualityThresholdConfig"]
+            TS["Top-level Settings"]
         end
-        subgraph "Functions"
-            GS[get_settings<br/>@lru_cache]
-            ED[ensure_directories]
+
+        subgraph Functions
+            GS["get_settings (@lru_cache)"]
+            ED["ensure_directories"]
         end
+
     end
 
-    subgraph "Application Modules"
-        MP[main.py]
-        WC[warehouse/connection.py]
-        AS[alerting/alert_service.py]
-        QR[quality/quality_report.py]
-        BP[pipelines/batch_pipeline.py]
-        SP[pipelines/stream_pipeline.py]
-        AM[All Other Modules]
+    subgraph Application_Modules
+        MP["main.py"]
+        WC["warehouse/connection.py"]
+        AS["alerting/alert_service.py"]
+        QR["quality/quality_report.py"]
+        BP["pipelines/batch_pipeline.py"]
+        SP["pipelines/stream_pipeline.py"]
+        AM["All Other Modules"]
     end
 
-    subgraph "Validation"
-        PV[Port Validation<br/>1-65535]
-        PCTV[Percentage Validation<br/>0-1]
-        PHV[PII Pepper Validation<br/>>=16 chars]
-        HV[Hour Validation<br/>0-23]
-        PSV[Pool Size Validation<br/>>=1]
+    subgraph Validation
+        PV["Port Validation (1-65535)"]
+        PCTV["Percentage Validation (0-1)"]
+        PHV["PII Pepper Validation (>=16 chars)"]
+        HV["Hour Validation (0-23)"]
+        PSV["Pool Size Validation (>=1)"]
     end
 
     ENV --> BS
     EV --> BS
     DF --> BS
+
     BS --> DC
     BS --> SC
     BS --> AC
     BS --> QC
+
     DC --> TS
     SC --> TS
     AC --> TS
