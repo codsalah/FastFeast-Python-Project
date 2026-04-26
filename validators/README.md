@@ -99,27 +99,132 @@ Detects orphan references in fact data:
 
 ## Relationship with Architecture
 
-### Position in Data Flow
-```
-┌─────────────────┐
-│  Source Data    │
-│  (CSV/JSON)     │
-└────────┬────────┘
-         │
-         │ (Validate)
-         ▼
-┌─────────────────┐
-│  Validators     │
-│  (Schema Check, │
-│   Orphan Detect)│
-└────────┬────────┘
-         │
-         │ (Valid/Invalid)
-         ▼
-┌─────────────────┐
-│  Loaders        │
-│  (Load/Quarantine)│
-└─────────────────┘
+### Architecture Diagram
+
+```mermaid
+graph TB
+    subgraph "Validators Directory"
+        VD[validators/]
+        SR[schema_registry.py]
+        SV[schema_validator.py]
+        OD[orphan_detector.py]
+    end
+
+    subgraph "Schema Registry Components"
+        CC[ColumnContract]
+        SC[SchemaContract]
+        REG[REGISTRY Dictionary]
+    end
+
+    subgraph "Validation Functions"
+        subgraph "Schema Validation"
+            VE[validate_entity]
+            PCVR[partition_critical_validation_rows]
+            VC[validate_column]
+            VV[validate_value]
+        end
+        subgraph "Orphan Detection"
+            DO[detect_orphans]
+            CDK[check_dimension_key]
+            GOS[get_orphan_statistics]
+        end
+    end
+
+    subgraph "Data Input"
+        SD[Source Data<br/>CSV/JSON]
+        DF[DataFrame]
+    end
+
+    subgraph "Loaders"
+        BSL[base_scd2_loader.py]
+        FOL[fact_orders_loader.py]
+        FTL[fact_tickets_loader.py]
+        FEL[fact_events_loader.py]
+    end
+
+    subgraph "Handlers"
+        OH[orphan_handler.py]
+        QH[quarantine_handler.py]
+    end
+
+    subgraph "Database"
+        DB[Database]
+        DM[Dimension Maps]
+    end
+
+    subgraph "Error Types"
+        ET1[missing_column]
+        ET2[type_mismatch]
+        ET3[null_violation]
+        ET4[value_out_of_range]
+        ET5[invalid_value]
+        ET6[regex_mismatch]
+    end
+
+    subgraph "Error Levels"
+        EL1[critical]
+        EL2[logical]
+    end
+
+    subgraph "Validation Rules"
+        VR1[Data Types]
+        VR2[Nullability]
+        VR3[Allowed Values]
+        VR4[Regex Patterns]
+        VR5[Value Ranges]
+    end
+
+    SD --> DF
+    DF --> VD
+    VD --> SR
+    VD --> SV
+    VD --> OD
+
+    SR --> CC
+    SR --> SC
+    SR --> REG
+    SV --> VE
+    SV --> PCVR
+    SV --> VC
+    SV --> VV
+    OD --> DO
+    OD --> CDK
+    OD --> GOS
+
+    VE --> VR1
+    VE --> VR2
+    VE --> VR3
+    VE --> VR4
+    VE --> VR5
+    VV --> ET1
+    VV --> ET2
+    VV --> ET3
+    VV --> ET4
+    VV --> ET5
+    VV --> ET6
+    PCVR --> EL1
+    PCVR --> EL2
+
+    BSL --> SV
+    FOL --> SV
+    FOL --> OD
+    FTL --> SV
+    FTL --> OD
+    FEL --> SV
+
+    OD --> DB
+    OD --> DM
+    OD --> OH
+
+    SV --> QH
+
+    style VD fill:#ff6b6b
+    style SR fill:#4ecdc4
+    style SV fill:#4ecdc4
+    style OD fill:#4ecdc4
+    style BSL fill:#ffe66d
+    style FOL fill:#ffe66d
+    style DB fill:#95e1d3
 ```
 
 ### Dependencies

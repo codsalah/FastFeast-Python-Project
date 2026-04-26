@@ -131,29 +131,92 @@ Environment variable naming follows the pattern:
 
 ## Relationship with Architecture
 
-### Position in Data Flow
-```
-┌─────────────────┐
-│   .env File     │
-│   (Environment) │
-└────────┬────────┘
-         │
-         │ (Pydantic Settings)
-         ▼
-┌─────────────────┐
-│   config/       │
-│   settings.py   │
-└────────┬────────┘
-         │
-         │ (get_settings())
-         ▼
-┌─────────────────┐
-│   All Modules   │
-│   (pipelines,   │
-│    loaders,     │
-│    handlers,    │
-│    etc.)        │
-└─────────────────┘
+### Architecture Diagram
+
+```mermaid
+graph TB
+    subgraph "Configuration Sources"
+        ENV[.env File]
+        EV[Environment Variables]
+        DF[Default Values]
+    end
+
+    subgraph "Configuration Layer"
+        subgraph "Pydantic Settings"
+            BS[BaseSettings]
+            PS[pydantic_settings]
+        end
+        subgraph "Config Classes"
+            DC[DatabaseConfig]
+            SC[SLAConfig]
+            AC[AlertConfig]
+            QC[QualityThresholdConfig]
+            TS[Top-level Settings]
+        end
+        subgraph "Functions"
+            GS[get_settings<br/>@lru_cache]
+            ED[ensure_directories]
+        end
+    end
+
+    subgraph "Application Modules"
+        MP[main.py]
+        WC[warehouse/connection.py]
+        AS[alerting/alert_service.py]
+        QR[quality/quality_report.py]
+        BP[pipelines/batch_pipeline.py]
+        SP[pipelines/stream_pipeline.py]
+        AM[All Other Modules]
+    end
+
+    subgraph "Validation"
+        PV[Port Validation<br/>1-65535]
+        PCTV[Percentage Validation<br/>0-1]
+        PHV[PII Pepper Validation<br/>>=16 chars]
+        HV[Hour Validation<br/>0-23]
+        PSV[Pool Size Validation<br/>>=1]
+    end
+
+    ENV --> BS
+    EV --> BS
+    DF --> BS
+    BS --> DC
+    BS --> SC
+    BS --> AC
+    BS --> QC
+    DC --> TS
+    SC --> TS
+    AC --> TS
+    QC --> TS
+
+    TS --> GS
+    TS --> ED
+
+    DC --> PV
+    DC --> PSV
+    SC --> PCTV
+    AC --> PCTV
+    QC --> PCTV
+    TS --> PHV
+    TS --> HV
+
+    MP --> GS
+    WC -->|db config| GS
+    AS -->|alert config| GS
+    QR -->|quality config| GS
+    BP -->|dirs & scheduling| GS
+    SP -->|dirs & polling| GS
+    AM --> GS
+
+    GS --> TS
+
+    style ENV fill:#4ecdc4
+    style TS fill:#ff6b6b
+    style GS fill:#ffe66d
+    style DC fill:#95e1d3
+    style SC fill:#95e1d3
+    style AC fill:#95e1d3
+    style QC fill:#95e1d3
 ```
 
 ### Dependencies

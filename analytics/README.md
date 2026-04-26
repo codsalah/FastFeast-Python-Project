@@ -89,30 +89,113 @@ The dashboard uses Streamlit's `@st.cache_data(ttl=300)` decorator to cache quer
 
 ## Relationship with Architecture
 
-### Position in Data Flow
-```
-┌─────────────────┐
-│   Warehouse     │
-│   (PostgreSQL)  │
-│                 │
-│  - Dimensions   │
-│  - Facts        │
-└────────┬────────┘
-         │
-         │ (OLAP Views)
-         ▼
-┌─────────────────┐
-│  Analytics      │
-│  Schema         │
-│  (Views)        │
-└────────┬────────┘
-         │
-         │ (Queries)
-         ▼
-┌─────────────────┐
-│  Streamlit      │
-│  Dashboard      │
-└─────────────────┘
+### Architecture Diagram
+
+```mermaid
+graph TB
+    subgraph "Warehouse Layer"
+        PG[PostgreSQL Database]
+        subgraph "Warehouse Schema"
+            DIM[Dimension Tables<br/>dim_customer, dim_driver<br/>dim_restaurant, dim_agent]
+            FCT[Fact Tables<br/>fact_orders, fact_tickets<br/>fact_ticket_events]
+        end
+        subgraph "Audit Schema"
+            AUD[pipeline_audit<br/>quality_metrics]
+        end
+    end
+
+    subgraph "Analytics Layer"
+        subgraph "OLAP Views"
+            V1[v_kpi_summary]
+            V2[v_tickets_by_location]
+            V3[v_tickets_by_restaurant]
+            V4[v_tickets_by_driver]
+            V5[v_sla_by_priority]
+            V6[v_ticket_trends_hourly]
+            V7[v_ticket_reopen_rate]
+            V8[v_revenue_impact]
+        end
+        subgraph "Analytics Client"
+            AC[AnalyticsClient]
+            ES[ensure_analytics_schema]
+            GS[get_summary_metrics]
+        end
+    end
+
+    subgraph "Dashboard Layer"
+        SD[Streamlit Dashboard]
+        KC[KPI Cards<br/>12 Metrics]
+        DB[Dimensional Breakdowns<br/>Location, Restaurant, Driver]
+        IC[Interactive Charts<br/>Plotly]
+        DC[Data Caching<br/>5 min TTL]
+    end
+
+    subgraph "Configuration"
+        WC[warehouse/connection.py]
+        CS[config/settings.py]
+        AD[analytics_ddl.sql]
+    end
+
+    subgraph "User Interface"
+        WB[Web Browser<br/>localhost:8501]
+        SH[Stakeholders]
+    end
+
+    DIM --> V1
+    DIM --> V2
+    DIM --> V3
+    DIM --> V4
+    FCT --> V1
+    FCT --> V5
+    FCT --> V6
+    FCT --> V7
+    FCT --> V8
+    AUD --> V1
+
+    AC --> ES
+    AC --> GS
+    ES --> V1
+    ES --> V2
+    ES --> V3
+    ES --> V4
+    ES --> V5
+    ES --> V6
+    ES --> V7
+    ES --> V8
+
+    GS --> V1
+    GS --> V2
+    GS --> V3
+    GS --> V4
+
+    SD --> KC
+    SD --> DB
+    SD --> IC
+    SD --> DC
+    DC --> AC
+    KC --> AC
+    DB --> AC
+    IC --> AC
+
+    AC --> WC
+    WC --> PG
+    AC --> CS
+    ES --> AD
+
+    SD --> WB
+    WB --> SH
+
+    style PG fill:#4ecdc4
+    style AC fill:#ff6b6b
+    style SD fill:#ffe66d
+    style V1 fill:#95e1d3
+    style V2 fill:#95e1d3
+    style V3 fill:#95e1d3
+    style V4 fill:#95e1d3
+    style V5 fill:#95e1d3
+    style V6 fill:#95e1d3
+    style V7 fill:#95e1d3
+    style V8 fill:#95e1d3
 ```
 
 ### Dependencies

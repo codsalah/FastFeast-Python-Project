@@ -87,33 +87,109 @@ Generates PDF quality reports:
 
 ## Relationship with Architecture
 
-### Position in Data Flow
-```
-┌─────────────────┐
-│  Pipelines      │
-│  (Loaders)      │
-└────────┬────────┘
-         │
-         │ (Report metrics)
-         ▼
-┌─────────────────┐
-│  Quality        │
-│  Metrics        │
-└────────┬────────┘
-         │
-         │ (Write to DB)
-         ▼
-┌─────────────────┐
-│  pipeline_audit │
-│  Schema         │
-└────────┬────────┘
-         │
-         │ (Generate report)
-         ▼
-┌─────────────────┐
-│  PDF Report     │
-│  (Email)        │
-└─────────────────┘
+### Architecture Diagram
+
+```mermaid
+graph TB
+    subgraph "Pipeline Layer"
+        PL[Pipelines]
+        LD[Loaders]
+        BP[Batch Pipeline]
+        SP[Stream Pipeline]
+    end
+
+    subgraph "Quality Layer"
+        MT[metrics_tracker.py]
+        QR[quality_report.py]
+        EAS[ensure_audit_schema]
+        SR[start_run]
+        CR[complete_run]
+        WQM[write_quality_metrics]
+        WQB[write_quarantine_batch]
+        EQF[export_quarantine_to_file]
+        GRS[get_run_summary]
+        GQMR[get_quality_metrics_for_run]
+        GDQ[generate_daily_quality_report]
+        CPD[create_pdf_report]
+        AKS[add_kpi_section]
+        AFMS[add_file_metrics_section]
+        AQS[add_quarantine_section]
+    end
+
+    subgraph "Audit Schema"
+        subgraph "Tables"
+            PRL[pipeline_run_log]
+            FT[file_tracker]
+            PQM[pipeline_quality_metrics]
+            QT[quarantine table]
+            OT[orphan_tracking]
+        end
+    end
+
+    subgraph "Quarantine Exports"
+        QE[quarantine_exports/]
+        QRF[quarantine_run_{run_id}.json]
+    end
+
+    subgraph "Alerting"
+        AS[alerting/alert_service.py]
+        SRP[send_report]
+    end
+
+    subgraph "Configuration"
+        CS[config/settings.py]
+        QTC[QualityThresholdConfig]
+    end
+
+    subgraph "Database & Utilities"
+        WC[warehouse/connection.py]
+        UR[utils/retry.py]
+        UL[utils/logger.py]
+    end
+
+    PL --> LD
+    LD --> MT
+    BP --> QR
+    SP --> MT
+
+    MT --> EAS
+    MT --> SR
+    MT --> CR
+    MT --> WQM
+    MT --> WQB
+    MT --> EQF
+    MT --> GRS
+    MT --> GQMR
+
+    QR --> GDQ
+    GDQ --> CPD
+    CPD --> AKS
+    CPD --> AFMS
+    CPD --> AQS
+
+    MT --> PQM
+    MT --> PRL
+    MT --> FT
+    MT --> QT
+    WQB --> QT
+    EQF --> QE
+    QE --> QRF
+
+    QR --> AS
+    AS --> SRP
+
+    MT --> CS
+    CS --> QTC
+    MT --> WC
+    MT --> UR
+    MT --> UL
+
+    style MT fill:#ff6b6b
+    style QR fill:#ff6b6b
+    style PQM fill:#4ecdc4
+    style QT fill:#4ecdc4
+    style QE fill:#ffe66d
+    style AS fill:#95e1d3
 ```
 
 ### Dependencies

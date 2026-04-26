@@ -115,26 +115,61 @@ FastFeast Data Platform
 
 ## Relationship with Architecture
 
-### Position in Data Flow
-```
-┌─────────────────┐
-│  Batch/Stream   │
-│    Pipeline     │
-└────────┬────────┘
-         │
-         │ (on failure/completion)
-         ▼
-┌─────────────────┐
-│  Alerting       │
-│  Service        │
-└────────┬────────┘
-         │
-         │ (SMTP)
-         ▼
-┌─────────────────┐
-│  Email Server   │
-│  (Gmail/SMTP)   │
-└─────────────────┘
+### Architecture Diagram
+
+```mermaid
+graph TB
+    subgraph "Pipeline Layer"
+        BP[Batch Pipeline]
+        SP[Stream Pipeline]
+        QR[Quality Report]
+        OH[Orphan Handler]
+    end
+
+    subgraph "Alerting Layer"
+        AS[AlertService]
+        ST[send_alert]
+        SR[send_report]
+        DT[Daemon Thread]
+        SM[SMTP Client]
+    end
+
+    subgraph "Configuration"
+        CS[config/settings.py]
+        ENV[.env File]
+    end
+
+    subgraph "Infrastructure"
+        ES[Email Server<br/>Gmail/SMTP]
+        REC[Recipients<br/>Alert & Report]
+    end
+
+    subgraph "Logging"
+        UL[utils/logger.py]
+    end
+
+    BP -->|on completion| QR
+    BP -->|on failure| AS
+    SP -->|on failure| AS
+    QR -->|generate report| AS
+    OH -->|orphan rate threshold| AS
+
+    AS --> ST
+    AS --> SR
+    ST --> DT
+    SR --> DT
+    DT --> SM
+    SM --> ES
+    ES --> REC
+
+    AS -->|get config| CS
+    CS -->|load settings| ENV
+    AS -->|log events| UL
+
+    style AS fill:#ff6b6b
+    style ES fill:#4ecdc4
+    style CS fill:#ffe66d
+    style UL fill:#95e1d3
 ```
 
 ### Dependencies

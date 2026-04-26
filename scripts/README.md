@@ -35,20 +35,131 @@ Note: Database DDL (Data Definition Language) scripts are currently located in t
 
 ## Relationship with Architecture
 
-### Position in Data Flow
-```
-┌─────────────────┐
-│  scripts/       │
-│  (Utility       │
-│   Scripts)      │
-└────────┬────────┘
-         │
-         │ (Manual execution)
-         ▼
-┌─────────────────┐
-│  Database       │
-│  (PostgreSQL)   │
-└─────────────────┘
+### Architecture Diagram
+
+```mermaid
+graph TB
+    subgraph "Scripts Directory"
+        SD[scripts/]
+        SDS[setup_db.sql/]
+    end
+
+    subgraph "Current DDL Location"
+        WH[warehouse/]
+        DDL[dwh_ddl.sql]
+        ADL[audit_ddl.sql]
+        ANDL[analytics_ddl.sql]
+        SD2[seed.sql]
+    end
+
+    subgraph "Potential Future Scripts"
+        subgraph "Database Setup"
+            ID[init_database.sql]
+            CS[create_schemas.sql]
+            CU[create_users.sql]
+            GP[grant_permissions.sql]
+        end
+        subgraph "Maintenance"
+            VA[vacuum_analyze.sql]
+            RI[reindex.sql]
+            COD[cleanup_old_data.sql]
+            AD[archive_data.sql]
+        end
+        subgraph "Monitoring"
+            HC[health_check.sql]
+            PS[performance_stats.sql]
+            SU[space_usage.sql]
+            CS2[connection_stats.sql]
+        end
+        subgraph "Backup/Restore"
+            BS[backup_schema.sql]
+            RS[restore_schema.sql]
+            BD[backup_data.sql]
+            RD[restore_data.sql]
+        end
+    end
+
+    subgraph "Database"
+        PG[PostgreSQL Database]
+        subgraph "Schemas"
+            DWH[dwh schema]
+            AUD[pipeline_audit schema]
+            AN[analytics schema]
+        end
+    end
+
+    subgraph "Users"
+        DBA[Database Administrators]
+        DEV[DevOps Engineers]
+        DEV2[Developers]
+    end
+
+    subgraph "Execution Methods"
+        PSQL[psql CLI]
+        DE[docker exec]
+        MAN[Manual Execution]
+    end
+
+    SD --> SDS
+    WH --> DDL
+    WH --> ADL
+    WH --> ANDL
+    WH --> SD2
+
+    SD --> ID
+    SD --> CS
+    SD --> CU
+    SD --> GP
+    SD --> VA
+    SD --> RI
+    SD --> COD
+    SD --> AD
+    SD --> HC
+    SD --> PS
+    SD --> SU
+    SD --> CS2
+    SD --> BS
+    SD --> RS
+    SD --> BD
+    SD --> RD
+
+    DDL --> PG
+    ADL --> PG
+    ANDL --> PG
+    SD2 --> PG
+    ID --> PG
+    CS --> PG
+    CU --> PG
+    GP --> PG
+    VA --> PG
+    RI --> PG
+    COD --> PG
+    AD --> PG
+    HC --> PG
+    PS --> PG
+    SU --> PG
+    CS2 --> PG
+    BS --> PG
+    RS --> PG
+    BD --> PG
+    RD --> PG
+
+    PG --> DWH
+    PG --> AUD
+    PG --> AN
+
+    DBA --> MAN
+    DEV --> MAN
+    DEV2 --> MAN
+    MAN --> PSQL
+    MAN --> DE
+    PSQL --> SD
+    DE --> SD
+
+    style SD fill:#ff6b6b
+    style WH fill:#4ecdc4
+    style PG fill:#ffe66d
+    style DBA fill:#95e1d3
 ```
 
 ### Dependencies

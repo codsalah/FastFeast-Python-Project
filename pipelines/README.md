@@ -122,36 +122,138 @@ Polls for new data files and processes them automatically:
 
 ## Relationship with Architecture
 
-### Position in Data Flow
-```
-┌─────────────────┐
-│  Data Files     │
-│  (batch/stream) │
-└────────┬────────┘
-         │
-         │ (Pipelines)
-         ▼
-┌─────────────────┐
-│  Orchestration  │
-│  (Loaders,      │
-│   Validators,   │
-│   Handlers)     │
-└────────┬────────┘
-         │
-         │ (Load)
-         ▼
-┌─────────────────┐
-│  Warehouse      │
-│  (Dimensions/   │
-│   Facts)        │
-└────────┬────────┘
-         │
-         │ (Reconciliation)
-         ▼
-┌─────────────────┐
-│  Backfill       │
-│  (Update Facts) │
-└─────────────────┘
+### Architecture Diagram
+
+```mermaid
+graph TB
+    subgraph "Data Input"
+        DF[Data Files<br/>batch/stream]
+        BD[Batch Directory<br/>YYYY-MM-DD]
+        SD[Stream Directory<br/>YYYY-MM-DD/HH]
+    end
+
+    subgraph "Batch Pipeline"
+        BP[batch_pipeline.py]
+        BPL[BatchPipeline class]
+        LSF[Load Static Files]
+        LMD[Load Main Dimensions]
+        TRF[Track Reference Files]
+        ROR[Run Orphan Reconciliation]
+        EQR[Export Quarantine Records]
+        GQR[Generate Quality Report]
+        SEN[Send Email Notification]
+    end
+
+    subgraph "Stream Pipeline"
+        SP[stream_pipeline.py]
+        PSH[process_single_hour]
+        PSF[process_stream_file]
+        CFS[Check File Stability]
+        LO[Load Orders]
+        LT[Load Tickets]
+        LE[Load Events]
+    end
+
+    subgraph "Orphan Reconciliation"
+        RJ[reconciliation_job.py]
+        RR[run_reconciliation]
+        RO[resolve_orphans]
+        BRO[backfill_resolved_orphans]
+        QPO[quarantine_persistent_orphans]
+    end
+
+    subgraph "Continuous Watcher"
+        W[watcher.py]
+        RCW[run_continuous_watch]
+        WB[watch_batch]
+        WS[watch_stream]
+        CFS2[check_file_stability]
+    end
+
+    subgraph "Loaders"
+        DL[Dimension Loaders]
+        FL[Fact Loaders]
+    end
+
+    subgraph "Handlers"
+        OH[Orphan Handler]
+        QH[Quarantine Handler]
+        BH[Backfill Handler]
+    end
+
+    subgraph "Quality & Alerting"
+        QM[Quality Metrics]
+        QR[Quality Report]
+        AS[Alerting Service]
+    end
+
+    subgraph "Database"
+        WH[Warehouse<br/>Dimensions/Facts]
+        OT[orphan_tracking]
+        QT[quarantine table]
+        PRL[pipeline_run_log]
+    end
+
+    DF --> BD
+    DF --> SD
+    BD --> BP
+    SD --> SP
+
+    BP --> BPL
+    BPL --> LSF
+    BPL --> LMD
+    BPL --> TRF
+    BPL --> ROR
+    BPL --> EQR
+    BPL --> GQR
+    BPL --> SEN
+
+    SP --> PSH
+    PSH --> PSF
+    PSF --> CFS
+    PSF --> LO
+    PSF --> LT
+    PSF --> LE
+
+    ROR --> RJ
+    RJ --> RR
+    RR --> RO
+    RR --> BRO
+    RR --> QPO
+
+    W --> RCW
+    RCW --> WB
+    RCW --> WS
+    WB --> BP
+    WS --> SP
+    WS --> CFS2
+
+    BP --> DL
+    SP --> FL
+    BP --> QH
+    SP --> OH
+    SP --> QH
+    ROR --> BH
+
+    BP --> QM
+    BP --> QR
+    QR --> AS
+
+    DL --> WH
+    FL --> WH
+    OH --> OT
+    QH --> QT
+    BP --> PRL
+    SP --> PRL
+
+    style BP fill:#ff6b6b
+    style SP fill:#ff6b6b
+    style RJ fill:#ff6b6b
+    style W fill:#ff6b6b
+    style DL fill:#4ecdc4
+    style FL fill:#4ecdc4
+    style WH fill:#ffe66d
+    style QM fill:#95e1d3
 ```
 
 ### Dependencies

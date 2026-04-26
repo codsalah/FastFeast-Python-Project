@@ -140,27 +140,116 @@ The generators intentionally create various data quality issues:
 
 ## Relationship with Architecture
 
-### Position in Data Flow
-```
-┌─────────────────┐
-│  Data           │
-│  Generators     │
-└────────┬────────┘
-         │
-         │ (CSV/JSON files)
-         ▼
-┌─────────────────┐
-│  data/input/    │
-│  batch/         │
-│  stream/        │
-└────────┬────────┘
-         │
-         │ (Pipelines read)
-         ▼
-┌─────────────────┐
-│  Batch/Stream   │
-│  Pipelines      │
-└─────────────────┘
+### Architecture Diagram
+
+```mermaid
+graph TB
+    subgraph "Data Generators"
+        GMD[generate_master_data.py]
+        GBD[generate_batch_data.py]
+        GSD[generate_stream_data.py]
+        ANC[add_new_customers.py]
+        AND[add_new_drivers.py]
+        SD[simulate_day.py]
+    end
+
+    subgraph "Generated Data"
+        subgraph "Master Data"
+            MD[data/master/]
+            LK[Lookup Tables<br/>cities, regions, segments<br/>categories, teams, reasons]
+            ET[Entity Tables<br/>customers, drivers<br/>restaurants, agents]
+            MET[metadata.json]
+        end
+        subgraph "Batch Data"
+            BD[data/input/batch/YYYY-MM-DD/]
+            BCSV[CSV Files<br/>customers, drivers, agents]
+            BJSON[JSON Files<br/>restaurants, cities]
+        end
+        subgraph "Stream Data"
+            SDIR[data/input/stream/YYYY-MM-DD/HH/]
+            SJSON[JSON Files<br/>orders, events]
+            SCSV[CSV Files<br/>tickets]
+        end
+    end
+
+    subgraph "Pipeline Layer"
+        BP[Batch Pipeline]
+        SP[Stream Pipeline]
+        LD[Loaders]
+        VL[Validators]
+    end
+
+    subgraph "Data Quality"
+        DQI[Data Quality Issues<br/>~20-25%]
+        NV[Null Values]
+        IF[Invalid Formats]
+        DP[Duplicates]
+        OR[Orphan References]
+        LI[Logical Inconsistencies]
+    end
+
+    subgraph "Dependencies"
+        PD[pandas]
+        RD[random]
+        DT[datetime]
+        JS[json]
+    end
+
+    GMD --> MD
+    GMD --> MET
+    GBD --> BD
+    GSD --> SDIR
+    ANC --> MD
+    ANC --> MET
+    AND --> MD
+    AND --> MET
+    SD --> GBD
+    SD --> GSD
+
+    MD --> LK
+    MD --> ET
+    BD --> BCSV
+    BD --> BJSON
+    SDIR --> SJSON
+    SDIR --> SCSV
+
+    BD --> BP
+    SDIR --> SP
+    MD --> LD
+    BD --> LD
+    SDIR --> LD
+    BD --> VL
+    SDIR --> VL
+
+    GMD --> DQI
+    GBD --> DQI
+    GSD --> DQI
+    DQI --> NV
+    DQI --> IF
+    DQI --> DP
+    DQI --> OR
+    DQI --> LI
+
+    GMD --> PD
+    GBD --> PD
+    GSD --> PD
+    GMD --> RD
+    GBD --> RD
+    GSD --> RD
+    GMD --> DT
+    GBD --> DT
+    GSD --> DT
+    GSD --> JS
+
+    style GMD fill:#ff6b6b
+    style GBD fill:#ff6b6b
+    style GSD fill:#ff6b6b
+    style MD fill:#4ecdc4
+    style BD fill:#4ecdc4
+    style SDIR fill:#4ecdc4
+    style BP fill:#ffe66d
+    style SP fill:#ffe66d
+    style DQI fill:#95e1d3
 ```
 
 ### Dependencies

@@ -153,23 +153,166 @@ Initial data for reference tables:
 
 ## Relationship with Architecture
 
-### Position in Data Flow
-```
-┌─────────────────┐
-│  Pipelines      │
-│  (Loaders)      │
-└────────┬────────┘
-         │
-         │ (connection.py)
-         ▼
-┌─────────────────┐
-│  PostgreSQL     │
-│  Database       │
-│                 │
-│  - dwh schema   │
-│  - audit schema │
-│  - analytics    │
-└─────────────────┘
+### Architecture Diagram
+
+```mermaid
+graph TB
+    subgraph "Warehouse Directory"
+        WH[warehouse/]
+        CP[connection.py]
+        DDL[dwh_ddl.sql]
+        ADL[audit_ddl.sql]
+        ANDL[analytics_ddl.sql]
+        SD[seed.sql]
+    end
+
+    subgraph "Connection Management"
+        subgraph "Functions"
+            IP[init_pool]
+            CLP[close_pool]
+            HC[health_check]
+            GC[get_conn]
+            GCR[get_cursor]
+            GDC[get_dict_cursor]
+            EV[execute_values]
+            EM[execute_many]
+        end
+        subgraph "Pool"
+            CP2[Connection Pool<br/>Thread-safe]
+            MIN[Min: 2]
+            MAX[Max: 10]
+        end
+    end
+
+    subgraph "Database Schemas"
+        subgraph "dwh Schema"
+            subgraph "Dimensions"
+                DC[dim_customer]
+                DDR[dim_driver]
+                DRES[dim_restaurant]
+                DAG[dim_agent]
+                DD[dim_date]
+            end
+            subgraph "Facts"
+                FO[fact_orders]
+                FT[fact_tickets]
+                FTE[fact_ticket_events]
+            end
+            subgraph "Reference"
+                RC[ref_city]
+                RREG[ref_region]
+                RSEG[ref_segment]
+                RCAT[ref_category]
+                RT[ref_team]
+                RR[ref_reason]
+                RCH[ref_channel]
+                RP[ref_priority]
+            end
+        end
+        subgraph "pipeline_audit Schema"
+            PRL[pipeline_run_log]
+            FT[file_tracker]
+            QT[quarantine table]
+            OT[orphan_tracking]
+            PQM[pipeline_quality_metrics]
+        end
+        subgraph "Analytics Views"
+            V1[v_kpi_summary]
+            V2[v_tickets_by_location]
+            V3[v_tickets_by_restaurant]
+            V4[v_tickets_by_driver]
+            V5[v_sla_by_priority]
+            V6[v_ticket_trends_hourly]
+            V7[v_ticket_reopen_rate]
+            V8[v_revenue_impact]
+        end
+    end
+
+    subgraph "Application Modules"
+        LD[loaders/]
+        HD[handlers/]
+        QL[quality/]
+        PL[pipelines/]
+        AN[analytics/]
+    end
+
+    subgraph "PostgreSQL Database"
+        PG[PostgreSQL Server]
+        DB[fastfeast_db]
+    end
+
+    WH --> CP
+    WH --> DDL
+    WH --> ADL
+    WH --> ANDL
+    WH --> SD
+
+    CP --> IP
+    CP --> CLP
+    CP --> HC
+    CP --> GC
+    CP --> GCR
+    CP --> GDC
+    CP --> EV
+    CP --> EM
+    CP --> CP2
+    CP2 --> MIN
+    CP2 --> MAX
+
+    DDL --> DC
+    DDL --> DDR
+    DDL --> DRES
+    DDL --> DAG
+    DDL --> DD
+    DDL --> FO
+    DDL --> FT
+    DDL --> FTE
+    DDL --> RC
+    DDL --> RREG
+    DDL --> RSEG
+    DDL --> RCAT
+    DDL --> RT
+    DDL --> RR
+    DDL --> RCH
+    DDL --> RP
+
+    ADL --> PRL
+    ADL --> FT
+    ADL --> QT
+    ADL --> OT
+    ADL --> PQM
+
+    ANDL --> V1
+    ANDL --> V2
+    ANDL --> V3
+    ANDL --> V4
+    ANDL --> V5
+    ANDL --> V6
+    ANDL --> V7
+    ANDL --> V8
+
+    SD --> RC
+    SD --> RREG
+    SD --> RR
+    SD --> RCH
+    SD --> RP
+
+    LD --> CP
+    HD --> CP
+    QL --> CP
+    PL --> CP
+    AN --> CP
+
+    CP --> PG
+    PG --> DB
+
+    style WH fill:#ff6b6b
+    style CP fill:#4ecdc4
+    style DDL fill:#4ecdc4
+    style ADL fill:#4ecdc4
+    style ANDL fill:#4ecdc4
+    style PG fill:#ffe66d
+    style LD fill:#95e1d3
 ```
 
 ### Dependencies

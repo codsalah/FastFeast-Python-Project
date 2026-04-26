@@ -172,32 +172,122 @@ Provides file reading utilities:
 
 ## Relationship with Architecture
 
-### Position in Data Flow
-```
-┌─────────────────┐
-│  All Modules    │
-│  (pipelines,    │
-│   loaders,      │
-│   handlers,     │
-│   etc.)         │
-└────────┬────────┘
-         │
-         │ (Use)
-         ▼
-┌─────────────────┐
-│  utils/         │
-│  (Shared        │
-│   Utilities)    │
-└────────┬────────┘
-         │
-         │ (Interact with)
-         ▼
-┌─────────────────┐
-│  File System,   │
-│  Database,      │
-│  Logging,       │
-│  etc.           │
-└─────────────────┘
+### Architecture Diagram
+
+```mermaid
+graph TB
+    subgraph "Utils Directory"
+        UT[utils/]
+        LG[logger.py]
+        FT[file_tracker.py]
+        FU[file_utils.py]
+        CL[config_loader.py]
+        RT[retry.py]
+        TM[timing.py]
+        PH[PII_handler.py]
+        DU[date_utils.py]
+        RD[readers.py]
+    end
+
+    subgraph "Application Modules"
+        PL[pipelines/]
+        LD[loaders/]
+        HD[handlers/]
+        QL[quality/]
+        VL[validators/]
+        WH[warehouse/]
+    end
+
+    subgraph "External Systems"
+        FS[File System]
+        DB[Database]
+        LOG[Logging System]
+        ENV[Environment Variables]
+    end
+
+    subgraph "Utility Functions"
+        subgraph "Logging"
+            CLG[configure_logging]
+            GLN[get_logger_name]
+            LAF[log_alert_fired]
+        end
+        subgraph "File Tracking"
+            CFH[compute_file_hash]
+            IFP[is_file_processed]
+            RF[register_file]
+            MFS[mark_file_success]
+            MFF[mark_file_failed]
+        end
+        subgraph "Retry Logic"
+            DR[@db_retry decorator]
+            RWB[retry_with_backoff]
+            ROE[retry_on_exception]
+        end
+        subgraph "Timing"
+            TD[@timed decorator]
+            TC[Timer context]
+            LT[log_timing]
+        end
+        subgraph "PII Handling"
+            HP[hash_pii]
+            MP[mask_pii]
+            IPF[is_pii_field]
+        end
+    end
+
+    PL --> LG
+    PL --> RT
+    PL --> TM
+    LD --> FT
+    LD --> RT
+    LD --> PH
+    LD --> TM
+    HD --> RT
+    HD --> LG
+    QL --> FT
+    QL --> LG
+    VL --> LG
+    WH --> LG
+    WH --> RT
+
+    LG --> CLG
+    LG --> GLN
+    LG --> LAF
+    FT --> CFH
+    FT --> IFP
+    FT --> RF
+    FT --> MFS
+    FT --> MFF
+    RT --> DR
+    RT --> RWB
+    RT --> ROE
+    TM --> TD
+    TM --> TC
+    TM --> LT
+    PH --> HP
+    PH --> MP
+    PH --> IPF
+
+    LG --> LOG
+    FT --> DB
+    RT --> DB
+    CL --> ENV
+    PH --> ENV
+
+    LG --> FS
+    FT --> FS
+    FU --> FS
+    RD --> FS
+
+    style UT fill:#ff6b6b
+    style LG fill:#4ecdc4
+    style FT fill:#4ecdc4
+    style RT fill:#4ecdc4
+    style TM fill:#4ecdc4
+    style PH fill:#4ecdc4
+    style PL fill:#ffe66d
+    style LD fill:#ffe66d
+    style DB fill:#95e1d3
 ```
 
 ### Dependencies

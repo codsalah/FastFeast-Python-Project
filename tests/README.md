@@ -87,30 +87,111 @@ The project uses pytest as the test framework:
 
 ## Relationship with Architecture
 
-### Position in Data Flow
-```
-┌─────────────────┐
-│  Tests/         │
-│  (Test Suite)   │
-└────────┬────────┘
-         │
-         │ (Execute)
-         ▼
-┌─────────────────┐
-│  Application    │
-│  Code           │
-│  (pipelines,    │
-│   loaders,      │
-│   handlers,     │
-│   etc.)         │
-└────────┬────────┘
-         │
-         │ (Test)
-         ▼
-┌─────────────────┐
-│  Assertions     │
-│  (Pass/Fail)    │
-└─────────────────┘
+### Architecture Diagram
+
+```mermaid
+graph TB
+    subgraph "Test Suite"
+        TS[tests/]
+        TA[test_alert.py]
+        TFT[test_file_tracker.py]
+        TO[test_orphan.py]
+        TORF[test_orphan_resolution_flow.py]
+        TQRE[test_quality_report_email_integration.py]
+        TW[test_watcher.py]
+        IAS[inspect_audit_schema.py]
+    end
+
+    subgraph "Test Framework"
+        PT[pytest]
+        PC[pytest-cov]
+        FX[Fixtures]
+        ASM[Assertions]
+        CR[Coverage Reports]
+    end
+
+    subgraph "Application Code"
+        subgraph "Components"
+            AL[alerting/]
+            LD[loaders/]
+            VL[validators/]
+            HD[handlers/]
+            PL[pipelines/]
+            QL[quality/]
+            UT[utils/]
+        end
+    end
+
+    subgraph "Test Database"
+        TDB[Test Database<br/>fastfeast_test_db]
+        TSC[Test Schema]
+        TTD[Test Data]
+    end
+
+    subgraph "Test Execution"
+        DEV[Developers]
+        CI[CI/CD Pipeline]
+        CR2[Code Review]
+    end
+
+    subgraph "Test Categories"
+        UT1[Unit Tests]
+        IT[Integration Tests]
+        E2E[End-to-End Tests]
+    end
+
+    TS --> TA
+    TS --> TFT
+    TS --> TO
+    TS --> TORF
+    TS --> TQRE
+    TS --> TW
+    TS --> IAS
+
+    TA --> PT
+    TFT --> PT
+    TO --> PT
+    TORF --> PT
+    TQRE --> PT
+    TW --> PT
+
+    PT --> FX
+    PT --> ASM
+    PT --> CR
+
+    TA --> AL
+    TFT --> UT
+    TO --> HD
+    TORF --> HD
+    TORF --> PL
+    TQRE --> QL
+    TW --> PL
+
+    TA --> TDB
+    TFT --> TDB
+    TO --> TDB
+    TORF --> TDB
+    TQRE --> TDB
+    TW --> TDB
+
+    TDB --> TSC
+    TDB --> TTD
+
+    DEV --> PT
+    CI --> PT
+    CR2 --> PT
+
+    TA --> UT1
+    TFT --> UT1
+    TO --> IT
+    TORF --> E2E
+    TQRE --> IT
+    TW --> IT
+
+    style TS fill:#ff6b6b
+    style PT fill:#4ecdc4
+    style TDB fill:#ffe66d
+    style DEV fill:#95e1d3
 ```
 
 ### Dependencies

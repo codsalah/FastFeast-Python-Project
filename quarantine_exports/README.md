@@ -87,34 +87,85 @@ Each quarantine record contains:
 
 ## Relationship with Architecture
 
-### Position in Data Flow
-```
-┌─────────────────┐
-│  Pipeline       │
-│  (Loaders)      │
-└────────┬────────┘
-         │
-         │ (Invalid records)
-         ▼
-┌─────────────────┐
-│  Quarantine     │
-│  (DB Table)     │
-└────────┬────────┘
-         │
-         │ (Export)
-         ▼
-┌─────────────────┐
-│  quarantine_    │
-│  exports/       │
-│  (JSON Files)   │
-└────────┬────────┘
-         │
-         │ (Manual review)
-         ▼
-┌─────────────────┐
-│  Correction     │
-│  & Re-import    │
-└─────────────────┘
+### Architecture Diagram
+
+```mermaid
+graph TB
+    subgraph "Pipeline Layer"
+        PL[Pipelines]
+        LD[Loaders]
+        VL[Validators]
+        QH[Quarantine Handler]
+    end
+
+    subgraph "Database"
+        subgraph "Audit Schema"
+            QT[quarantine table]
+            PRL[pipeline_run_log]
+        end
+    end
+
+    subgraph "Quality Layer"
+        MT[metrics_tracker.py]
+        EQF[export_quarantine_to_file]
+    end
+
+    subgraph "Quarantine Exports"
+        QE[quarantine_exports/]
+        QRF[quarantine_run_{run_id}.json]
+    end
+
+    subgraph "Manual Review"
+        DE[Data Engineers]
+        QT[Quality Team]
+        PO[Pipeline Operators]
+    end
+
+    subgraph "Correction Process"
+        MR[Manual Review]
+        CF[Correct Source Data]
+        RRP[Re-run Pipeline]
+        VFY[Verify]
+        ARC[Archive]
+    end
+
+    subgraph "Error Types"
+        ET1[schema_validation]
+        ET2[orphan]
+        ET3[referential_integrity]
+        ET4[parse_error]
+    end
+
+    PL --> LD
+    LD --> VL
+    VL --> QH
+    QH --> QT
+    QH --> PRL
+
+    PL --> MT
+    MT --> EQF
+    EQF --> QE
+    QE --> QRF
+
+    QRF --> DE
+    QRF --> QT
+    QRF --> PO
+
+    DE --> MR
+    MR --> CF
+    CF --> RRP
+    RRP --> VFY
+    VFY --> ARC
+
+    QH --> ET1
+    QH --> ET2
+    QH --> ET3
+    QH --> ET4
+
+    style QH fill:#ff6b6b
+    style QT fill:#4ecdc4
+    style QE fill:#ffe66d
+    style MT fill:#95e1d3
 ```
 
 ### Dependencies

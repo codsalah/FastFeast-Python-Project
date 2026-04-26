@@ -189,34 +189,157 @@ Loaders track and report:
 
 ## Relationship with Architecture
 
-### Position in Data Flow
-```
-┌─────────────────┐
-│  Source Files   │
-│  (CSV/JSON)     │
-└────────┬────────┘
-         │
-         │ (Loaders)
-         ▼
-┌─────────────────┐
-│  Validation     │
-│  (Schema Check) │
-└────────┬────────┘
-         │
-         │ (Valid/Invalid)
-         ▼
-┌─────────────────┐
-│  Warehouse      │
-│  (Dimensions/   │
-│   Facts)        │
-└────────┬────────┘
-         │
-         │ (Quarantine)
-         ▼
-┌─────────────────┐
-│  Quarantine     │
-│  Table         │
-└─────────────────┘
+### Architecture Diagram
+
+```mermaid
+graph TB
+    subgraph "Source Data"
+        SF[Source Files<br/>CSV/JSON]
+        MD[Master Data]
+        BD[Batch Data]
+        SD[Stream Data]
+    end
+
+    subgraph "Base Loader"
+        BSL[base_scd2_loader.py]
+        DC[_detect_changes]
+        IN[_insert_new]
+        EO[_expire_old_row]
+        AS1[_apply_scd1]
+        ASD[_apply_same_day_update]
+    end
+
+    subgraph "Dimension Loaders"
+        DCL[dim_customer_loader.py]
+        DDL[dim_driver_loader.py]
+        DRL[dim_restaurant_loader.py]
+        DAL[dim_agent_loader.py]
+        DDLT[dim_date_loader.py]
+        DSL[dim_static_loader.py]
+    end
+
+    subgraph "Fact Loaders"
+        FOL[fact_orders_loader.py]
+        FTL[fact_tickets_loader.py]
+        FEL[fact_events_loader.py]
+    end
+
+    subgraph "Utility Loaders"
+        IDL[init_data_loader.py]
+        VL[verify_loaders.py]
+    end
+
+    subgraph "Validation & Quality"
+        SR[validators/schema_registry.py]
+        SV[validators/schema_validator.py]
+        QH[handlers/quarantine_handler.py]
+        OH[handlers/orphan_handler.py]
+        QM[quality/metrics_tracker.py]
+    end
+
+    subgraph "Database & Utilities"
+        WC[warehouse/connection.py]
+        UR[utils/retry.py]
+        UT[utils/timing.py]
+    end
+
+    subgraph "Warehouse"
+        subgraph "Dimension Tables"
+            DCUST[dim_customer]
+            DDRV[dim_driver]
+            DREST[dim_restaurant]
+            DAGENT[dim_agent]
+            DDATE[dim_date]
+            DSTATIC[Static Data]
+        end
+        subgraph "Fact Tables"
+            FORD[fact_orders]
+            FTICK[fact_tickets]
+            FEVT[fact_events]
+        end
+        subgraph "Quarantine"
+            QT[quarantine table]
+        end
+    end
+
+    SF --> BSL
+    SF --> FOL
+    SF --> FTL
+    SF --> FEL
+    MD --> DCL
+    MD --> DDL
+    MD --> DRL
+    MD --> DAL
+    BD --> DCL
+    BD --> DDL
+    BD --> DRL
+    BD --> DAL
+    SD --> FOL
+    SD --> FTL
+    SD --> FEL
+
+    BSL --> DC
+    BSL --> IN
+    BSL --> EO
+    BSL --> AS1
+    BSL --> ASD
+
+    DCL --> BSL
+    DDL --> BSL
+    DRL --> BSL
+    DAL --> BSL
+    DDLT --> BSL
+    DSL --> BSL
+
+    FOL --> SR
+    FTL --> SR
+    FEL --> SR
+    FOL --> OH
+    FTL --> OH
+
+    BSL --> SR
+    BSL --> SV
+    BSL --> QH
+    FOL --> QH
+    FTL --> QH
+    FEL --> QH
+
+    BSL --> QM
+    FOL --> QM
+    FTL --> QM
+    FEL --> QM
+
+    BSL --> WC
+    FOL --> WC
+    FTL --> WC
+    FEL --> WC
+    BSL --> UR
+    FOL --> UR
+    FTL --> UR
+    FEL --> UR
+    BSL --> UT
+
+    DCL --> DCUST
+    DDL --> DDRV
+    DRL --> DREST
+    DAL --> DAGENT
+    DDLT --> DDATE
+    DSL --> DSTATIC
+    FOL --> FORD
+    FTL --> FTICK
+    FEL --> FEVT
+    QH --> QT
+
+    style BSL fill:#ff6b6b
+    style DCL fill:#4ecdc4
+    style DDL fill:#4ecdc4
+    style DRL fill:#4ecdc4
+    style DAL fill:#4ecdc4
+    style FOL fill:#ffe66d
+    style FTL fill:#ffe66d
+    style FEL fill:#ffe66d
+    style SR fill:#95e1d3
+    style WC fill:#95e1d3
 ```
 
 ### Dependencies

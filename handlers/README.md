@@ -88,40 +88,114 @@ Handles backfill of resolved orphan references:
 
 ## Relationship with Architecture
 
-### Position in Data Flow
-```
-┌─────────────────┐
-│  Stream Load    │
-│  (fact_orders)  │
-└────────┬────────┘
-         │
-         │ (orphan_handler)
-         ▼
-┌─────────────────┐
-│  Orphan         │
-│  Detection      │
-└────────┬────────┘
-         │
-         │ (track in orphan_tracking)
-         ▼
-┌─────────────────┐
-│  Batch Load     │
-│  (dimensions)   │
-└────────┬────────┘
-         │
-         │ (reconciliation_job)
-         ▼
-┌─────────────────┐
-│  Orphan         │
-│  Resolution     │
-└────────┬────────┘
-         │
-         │ (backfill_handler)
-         ▼
-┌─────────────────┐
-│  Backfill       │
-│  (update facts) │
-└─────────────────┘
+### Architecture Diagram
+
+```mermaid
+graph TB
+    subgraph "Stream Pipeline"
+        SL[Stream Load]
+        FOL[fact_orders_loader]
+        FTL[fact_tickets_loader]
+    end
+
+    subgraph "Orphan Detection"
+        OH[orphan_handler.py]
+        LOD[load_orphan_dimension_surrogate_maps]
+        ROD[resolve_order_dimension_surrogates]
+        TOD[track_order_dimension_orphans]
+    end
+
+    subgraph "Orphan Tracking"
+        OT[orphan_tracking table]
+        S1[Step 1: Detect<br/>assign -1 surrogate]
+        S2[Step 2: Track<br/>store original ID]
+    end
+
+    subgraph "Batch Pipeline"
+        BL[Batch Load]
+        DL[Dimension Loaders]
+        RJ[reconciliation_job]
+    end
+
+    subgraph "Orphan Resolution"
+        RO[resolve_orphans]
+        MO[mark_orphans_resolved]
+    end
+
+    subgraph "Backfill Operations"
+        BH[backfill_handler.py]
+        RBA[run_backfill_after_batch]
+        BRO[backfill_resolved_orphans]
+        QPO[quarantine_persistent_orphans]
+    end
+
+    subgraph "Quarantine Management"
+        QH[quarantine_handler.py]
+        SBQ[send_batch_to_quarantine]
+        BQR[build_quarantine_record]
+        EQF[export_quarantine_to_file]
+        QT[quarantine table]
+        QE[quarantine_exports/]
+    end
+
+    subgraph "Database & Utilities"
+        WC[warehouse/connection.py]
+        UR[utils/retry.py]
+        UL[utils/logger.py]
+        QMT[quality/metrics_tracker.py]
+    end
+
+    subgraph "Fact Updates"
+        FT[fact_orders]
+        FV[New Fact Versions<br/>version++, is_backfilled=true]
+    end
+
+    FOL --> OH
+    FTL --> OH
+    OH --> LOD
+    OH --> ROD
+    OH --> TOD
+    TOD --> OT
+    OT --> S1
+    OT --> S2
+
+    BL --> DL
+    DL --> RJ
+    RJ --> RO
+    RO --> MO
+
+    RJ --> BH
+    BH --> RBA
+    RBA --> BRO
+    BRO --> FV
+    RBA --> QPO
+
+    OH --> WC
+    BH --> WC
+    QH --> WC
+    OH --> UR
+    BH --> UR
+    QH --> UR
+    OH --> UL
+    BH --> UL
+    QH --> UL
+    QH --> QMT
+
+    QH --> SBQ
+    QH --> BQR
+    QH --> EQF
+    SBQ --> QT
+    EQF --> QE
+
+    BRO --> FT
+
+    style OH fill:#ff6b6b
+    style BH fill:#ff6b6b
+    style QH fill:#ff6b6b
+    style OT fill:#4ecdc4
+    style QT fill:#4ecdc4
+    style FT fill:#ffe66d
+    style FV fill:#ffe66d
 ```
 
 ### Dependencies
