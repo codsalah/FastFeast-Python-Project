@@ -112,6 +112,25 @@ class AnalyticsClient:
             return {}
         return df.iloc[0].to_dict()
     
+    def get_order_summary(self) -> dict:
+        """Get order summary metrics."""
+        df = self._query_to_df(f"SELECT * FROM {self.schema}.v_order_summary")
+        if df.empty:
+            return {}
+        return df.iloc[0].to_dict()
+    
+    def get_order_trends_daily(self) -> pd.DataFrame:
+        """Get daily order trends."""
+        return self._query_to_df(f"SELECT * FROM {self.schema}.v_order_trends_daily ORDER BY order_date DESC LIMIT 30")
+    
+    def get_orders_by_region(self) -> pd.DataFrame:
+        """Get order breakdown by region."""
+        return self._query_to_df(f"SELECT * FROM {self.schema}.v_orders_by_region")
+    
+    def get_orders_by_restaurant(self) -> pd.DataFrame:
+        """Get order breakdown by restaurant."""
+        return self._query_to_df(f"SELECT * FROM {self.schema}.v_orders_by_restaurant")
+    
     def get_hourly_trends(self) -> pd.DataFrame:
         raise NotImplementedError("Hourly trends are out of scope for the required analytics.")
     

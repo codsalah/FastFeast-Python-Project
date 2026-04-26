@@ -40,7 +40,7 @@ CREATE TABLE IF NOT EXISTS file_tracker (
     status              varchar(50) NOT NULL,
     processed_at        timestamp NOT NULL,
     pipeline_run_id     integer REFERENCES pipeline_run_log(run_id),
-    UNIQUE (file_path, file_hash)
+    UNIQUE (file_hash)
 );
 
 CREATE TABLE IF NOT EXISTS pipeline_quality_metrics (

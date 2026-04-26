@@ -7,6 +7,7 @@
 -- PostgreSQL limitation: CREATE OR REPLACE VIEW cannot remove columns from an
 -- existing view definition. To keep the analytics scope strict, we drop and
 -- recreate the views deterministically.
+DROP VIEW IF EXISTS warehouse.v_business_kpi_summary;
 DROP VIEW IF EXISTS warehouse.v_sla_by_priority;
 DROP VIEW IF EXISTS warehouse.v_ticket_trends_hourly;
 DROP VIEW IF EXISTS warehouse.v_tickets_by_agent;
@@ -18,74 +19,152 @@ DROP VIEW IF EXISTS warehouse.v_revenue_impact;
 DROP VIEW IF EXISTS warehouse.v_tickets_by_driver;
 DROP VIEW IF EXISTS warehouse.v_tickets_by_restaurant;
 DROP VIEW IF EXISTS warehouse.v_tickets_by_location;
+DROP VIEW IF EXISTS warehouse.v_order_summary;
+DROP VIEW IF EXISTS warehouse.v_order_trends_daily;
+DROP VIEW IF EXISTS warehouse.v_orders_by_region;
+DROP VIEW IF EXISTS warehouse.v_orders_by_restaurant;
 
 -- ============================================================
 -- 1. TICKETS BY CITY/REGION
 -- ============================================================
 CREATE OR REPLACE VIEW warehouse.v_tickets_by_location AS
-SELECT 
-    COALESCE(dc.region_name, 'Unknown') AS region_name,
-    COALESCE(dc.city_name, 'Unknown') AS city_name,
+WITH latest_orders_for_orphans AS (
+    SELECT
+        order_id,
+        customer_key,
+        driver_key,
+        restaurant_key
+    FROM warehouse.fact_orders
+    WHERE version = (
+        SELECT MAX(version)
+        FROM warehouse.fact_orders fo2
+        WHERE fo2.order_id = fact_orders.order_id
+    )
+    AND order_id IN (
+        SELECT order_id
+        FROM warehouse.fact_tickets
+        WHERE customer_key = -1 OR driver_key = -1 OR restaurant_key = -1
+    )
+)
+SELECT
+    dc.region_name,
+    dc.city_name,
     COUNT(DISTINCT ft.ticket_id) AS total_tickets,
     SUM(CASE WHEN ft.sla_resolution_breached THEN 1 ELSE 0 END) AS resolution_breaches,
     ROUND(
-        100.0 * SUM(CASE WHEN ft.sla_resolution_breached THEN 1 ELSE 0 END) / 
+        100.0 * SUM(CASE WHEN ft.sla_resolution_breached THEN 1 ELSE 0 END) /
         NULLIF(COUNT(*), 0), 2
     ) AS sla_breach_rate_pct,
     ROUND(AVG(ft.resolution_minutes)::numeric, 2) AS avg_resolution_minutes,
     SUM(ft.refund_amount) AS total_refund_amount,
     ROUND(AVG(ft.refund_amount), 2) AS avg_refund_amount
 FROM warehouse.fact_tickets ft
-LEFT JOIN warehouse.dim_customer dc ON ft.customer_key = dc.customer_key
-GROUP BY COALESCE(dc.region_name, 'Unknown'), COALESCE(dc.city_name, 'Unknown')
+LEFT JOIN latest_orders_for_orphans lo ON ft.order_id = lo.order_id
+INNER JOIN warehouse.dim_customer dc ON COALESCE(lo.customer_key, ft.customer_key) = dc.customer_key
+WHERE COALESCE(lo.customer_key, ft.customer_key) != -1
+  AND COALESCE(lo.driver_key, ft.driver_key) != -1
+  AND COALESCE(lo.restaurant_key, ft.restaurant_key) != -1
+  AND dc.region_name IS NOT NULL
+  AND dc.city_name IS NOT NULL
+GROUP BY dc.region_name, dc.city_name
 ORDER BY total_tickets DESC;
 
 -- ============================================================
 -- 2. TICKETS BY RESTAURANT
 -- ============================================================
 CREATE OR REPLACE VIEW warehouse.v_tickets_by_restaurant AS
-SELECT 
-    COALESCE(dr.restaurant_name, 'Unknown') AS restaurant_name,
-    COALESCE(dr.category_name, 'Unknown') AS category_name,
-    COALESCE(dr.city_name, 'Unknown') AS city_name,
-    COALESCE(dr.region_name, 'Unknown') AS region_name,
+WITH latest_orders_for_orphans AS (
+    SELECT
+        order_id,
+        customer_key,
+        driver_key,
+        restaurant_key
+    FROM warehouse.fact_orders
+    WHERE version = (
+        SELECT MAX(version)
+        FROM warehouse.fact_orders fo2
+        WHERE fo2.order_id = fact_orders.order_id
+    )
+    AND order_id IN (
+        SELECT order_id
+        FROM warehouse.fact_tickets
+        WHERE customer_key = -1 OR driver_key = -1 OR restaurant_key = -1
+    )
+)
+SELECT
+    dr.restaurant_name,
+    dr.category_name,
+    dr.city_name,
+    dr.region_name,
     COUNT(DISTINCT ft.ticket_id) AS total_tickets,
     SUM(CASE WHEN ft.sla_resolution_breached THEN 1 ELSE 0 END) AS resolution_breaches,
     ROUND(
-        100.0 * SUM(CASE WHEN ft.sla_resolution_breached THEN 1 ELSE 0 END) / 
+        100.0 * SUM(CASE WHEN ft.sla_resolution_breached THEN 1 ELSE 0 END) /
         NULLIF(COUNT(*), 0), 2
     ) AS sla_breach_rate_pct,
     ROUND(AVG(ft.resolution_minutes)::numeric, 2) AS avg_resolution_minutes,
     SUM(ft.refund_amount) AS total_refund_amount,
     ROUND(AVG(ft.refund_amount), 2) AS avg_refund_amount
 FROM warehouse.fact_tickets ft
-LEFT JOIN warehouse.dim_restaurant dr ON ft.restaurant_key = dr.restaurant_key
-GROUP BY COALESCE(dr.restaurant_name, 'Unknown'), COALESCE(dr.category_name, 'Unknown'),
-         COALESCE(dr.city_name, 'Unknown'), COALESCE(dr.region_name, 'Unknown')
+LEFT JOIN latest_orders_for_orphans lo ON ft.order_id = lo.order_id
+INNER JOIN warehouse.dim_restaurant dr ON COALESCE(lo.restaurant_key, ft.restaurant_key) = dr.restaurant_key
+WHERE COALESCE(lo.customer_key, ft.customer_key) != -1
+  AND COALESCE(lo.driver_key, ft.driver_key) != -1
+  AND COALESCE(lo.restaurant_key, ft.restaurant_key) != -1
+  AND dr.restaurant_name IS NOT NULL
+  AND dr.category_name IS NOT NULL
+  AND dr.city_name IS NOT NULL
+  AND dr.region_name IS NOT NULL
+GROUP BY dr.restaurant_name, dr.category_name, dr.city_name, dr.region_name
 ORDER BY total_tickets DESC;
 
 -- ============================================================
 -- 3. TICKETS BY DRIVER
 -- ============================================================
 CREATE OR REPLACE VIEW warehouse.v_tickets_by_driver AS
-SELECT 
-    COALESCE(dd.driver_name, 'Unknown') AS driver_name,
-    COALESCE(dd.vehicle_type, 'Unknown') AS vehicle_type,
-    COALESCE(dd.city_name, 'Unknown') AS city_name,
-    COALESCE(dd.region_name, 'Unknown') AS region_name,
+WITH latest_orders_for_orphans AS (
+    SELECT
+        order_id,
+        customer_key,
+        driver_key,
+        restaurant_key
+    FROM warehouse.fact_orders
+    WHERE version = (
+        SELECT MAX(version)
+        FROM warehouse.fact_orders fo2
+        WHERE fo2.order_id = fact_orders.order_id
+    )
+    AND order_id IN (
+        SELECT order_id
+        FROM warehouse.fact_tickets
+        WHERE customer_key = -1 OR driver_key = -1 OR restaurant_key = -1
+    )
+)
+SELECT
+    dd.driver_name,
+    dd.vehicle_type,
+    dd.city_name,
+    dd.region_name,
     COUNT(DISTINCT ft.ticket_id) AS total_tickets,
     SUM(CASE WHEN ft.sla_resolution_breached THEN 1 ELSE 0 END) AS resolution_breaches,
     ROUND(
-        100.0 * SUM(CASE WHEN ft.sla_resolution_breached THEN 1 ELSE 0 END) / 
+        100.0 * SUM(CASE WHEN ft.sla_resolution_breached THEN 1 ELSE 0 END) /
         NULLIF(COUNT(*), 0), 2
     ) AS sla_breach_rate_pct,
     ROUND(AVG(ft.resolution_minutes)::numeric, 2) AS avg_resolution_minutes,
     SUM(ft.refund_amount) AS total_refund_amount,
     ROUND(AVG(ft.refund_amount), 2) AS avg_refund_amount
 FROM warehouse.fact_tickets ft
-LEFT JOIN warehouse.dim_driver dd ON ft.driver_key = dd.driver_key
-GROUP BY COALESCE(dd.driver_name, 'Unknown'), COALESCE(dd.vehicle_type, 'Unknown'),
-         COALESCE(dd.city_name, 'Unknown'), COALESCE(dd.region_name, 'Unknown')
+LEFT JOIN latest_orders_for_orphans lo ON ft.order_id = lo.order_id
+INNER JOIN warehouse.dim_driver dd ON COALESCE(lo.driver_key, ft.driver_key) = dd.driver_key
+WHERE COALESCE(lo.customer_key, ft.customer_key) != -1
+  AND COALESCE(lo.driver_key, ft.driver_key) != -1
+  AND COALESCE(lo.restaurant_key, ft.restaurant_key) != -1
+  AND dd.driver_name IS NOT NULL
+  AND dd.vehicle_type IS NOT NULL
+  AND dd.city_name IS NOT NULL
+  AND dd.region_name IS NOT NULL
+GROUP BY dd.driver_name, dd.vehicle_type, dd.city_name, dd.region_name
 ORDER BY total_tickets DESC;
 
 -- ============================================================
@@ -118,27 +197,24 @@ WITH ticket_status_changes AS (
     SELECT 
         ft.ticket_id,
         COUNT(DISTINCT CASE 
-            WHEN fte.new_status = 'resolved' THEN fte.event_key 
+            WHEN fte.new_status = 'Resolved' THEN fte.event_key
         END) AS resolve_count,
-        MAX(CASE 
-            WHEN fte.new_status = 'resolved' THEN fte.event_ts 
-        END) AS last_resolved_at,
-        MAX(CASE 
-            WHEN fte.new_status = 'reopened' THEN fte.event_ts 
-        END) AS last_reopened_at
+        COUNT(DISTINCT CASE 
+            WHEN fte.new_status = 'Reopened' THEN fte.event_key
+        END) AS reopen_count
     FROM warehouse.fact_tickets ft
     LEFT JOIN warehouse.fact_ticket_events fte ON ft.ticket_key = fte.ticket_key
     GROUP BY ft.ticket_id
 )
-SELECT 
+SELECT
     COUNT(DISTINCT ticket_id) AS total_tickets,
-    COUNT(DISTINCT CASE 
-        WHEN last_reopened_at > last_resolved_at THEN ticket_id 
+    COUNT(DISTINCT CASE
+        WHEN reopen_count > 0 THEN ticket_id
     END) AS reopened_tickets,
     ROUND(
-        100.0 * COUNT(DISTINCT CASE 
-            WHEN last_reopened_at > last_resolved_at THEN ticket_id 
-        END) / 
+        100.0 * COUNT(DISTINCT CASE
+            WHEN reopen_count > 0 THEN ticket_id
+        END) /
         NULLIF(COUNT(DISTINCT ticket_id), 0), 2
     ) AS reopen_rate_pct,
     COUNT(DISTINCT CASE WHEN resolve_count > 1 THEN ticket_id END) AS multiply_resolved_tickets
@@ -186,3 +262,121 @@ SELECT
 FROM order_totals ot
 CROSS JOIN ticket_refunds tr
 CROSS JOIN revenue_at_risk rar;
+
+-- ============================================================
+-- 7. ORDER SUMMARY (Business Metrics)
+-- ============================================================
+CREATE OR REPLACE VIEW warehouse.v_order_summary AS
+SELECT 
+    COUNT(DISTINCT fo.order_id) AS total_orders,
+    ROUND(AVG(fo.order_amount)::numeric, 2) AS avg_order_amount,
+    ROUND(AVG(fo.total_amount)::numeric, 2) AS avg_total_amount,
+    ROUND(AVG(fo.delivery_fee)::numeric, 2) AS avg_delivery_fee,
+    SUM(fo.total_amount) AS total_revenue,
+    SUM(fo.discount_amount) AS total_discounts,
+    COUNT(DISTINCT CASE WHEN fo.order_status = 'Delivered' THEN fo.order_id END) AS delivered_orders,
+    COUNT(DISTINCT CASE WHEN fo.order_status = 'Cancelled' THEN fo.order_id END) AS cancelled_orders,
+    ROUND(
+        100.0 * COUNT(DISTINCT CASE WHEN fo.order_status = 'Delivered' THEN fo.order_id END) / 
+        NULLIF(COUNT(DISTINCT fo.order_id), 0), 2
+    ) AS delivery_rate_pct,
+    COUNT(DISTINCT CASE WHEN EXISTS (
+        SELECT 1 FROM warehouse.fact_tickets ft WHERE ft.order_id = fo.order_id
+    ) THEN fo.order_id END) AS orders_with_tickets
+FROM warehouse.fact_orders fo;
+
+-- ============================================================
+-- 8. ORDER TRENDS DAILY
+-- ============================================================
+CREATE OR REPLACE VIEW warehouse.v_order_trends_daily AS
+SELECT 
+    DATE(fo.order_created_at) AS order_date,
+    COUNT(DISTINCT fo.order_id) AS total_orders,
+    SUM(fo.total_amount) AS daily_revenue,
+    ROUND(AVG(fo.total_amount)::numeric, 2) AS avg_order_value,
+    COUNT(DISTINCT CASE WHEN fo.order_status = 'Delivered' THEN fo.order_id END) AS delivered_orders,
+    COUNT(DISTINCT CASE WHEN fo.order_status = 'Cancelled' THEN fo.order_id END) AS cancelled_orders,
+    COUNT(DISTINCT CASE WHEN EXISTS (
+        SELECT 1 FROM warehouse.fact_tickets ft WHERE ft.order_id = fo.order_id
+    ) THEN fo.order_id END) AS orders_with_tickets
+FROM warehouse.fact_orders fo
+GROUP BY DATE(fo.order_created_at)
+ORDER BY order_date DESC;
+
+-- ============================================================
+-- 9. ORDERS BY REGION
+-- ============================================================
+CREATE OR REPLACE VIEW warehouse.v_orders_by_region AS
+SELECT
+    dr.region_name,
+    COUNT(DISTINCT fo.order_id) AS total_orders,
+    SUM(fo.total_amount) AS total_revenue,
+    ROUND(AVG(fo.total_amount)::numeric, 2) AS avg_order_value,
+    COUNT(DISTINCT CASE WHEN fo.order_status = 'Delivered' THEN fo.order_id END) AS delivered_orders,
+    COUNT(DISTINCT CASE WHEN EXISTS (
+        SELECT 1 FROM warehouse.fact_tickets ft WHERE ft.order_id = fo.order_id
+    ) THEN fo.order_id END) AS orders_with_tickets
+FROM warehouse.fact_orders fo
+INNER JOIN warehouse.dim_restaurant dr ON fo.restaurant_key = dr.restaurant_key
+WHERE fo.restaurant_key != -1
+  AND dr.region_name IS NOT NULL
+GROUP BY dr.region_name
+ORDER BY total_orders DESC;
+
+-- ============================================================
+-- 10. ORDERS BY RESTAURANT
+-- ============================================================
+CREATE OR REPLACE VIEW warehouse.v_orders_by_restaurant AS
+SELECT
+    dr.restaurant_name,
+    dr.category_name,
+    dr.region_name,
+    COUNT(DISTINCT fo.order_id) AS total_orders,
+    SUM(fo.total_amount) AS total_revenue,
+    ROUND(AVG(fo.total_amount)::numeric, 2) AS avg_order_value,
+    COUNT(DISTINCT CASE WHEN fo.order_status = 'Delivered' THEN fo.order_id END) AS delivered_orders,
+    COUNT(DISTINCT CASE WHEN EXISTS (
+        SELECT 1 FROM warehouse.fact_tickets ft WHERE ft.order_id = fo.order_id
+    ) THEN fo.order_id END) AS orders_with_tickets
+FROM warehouse.fact_orders fo
+INNER JOIN warehouse.dim_restaurant dr ON fo.restaurant_key = dr.restaurant_key
+WHERE fo.restaurant_key != -1
+  AND dr.restaurant_name IS NOT NULL
+  AND dr.category_name IS NOT NULL
+  AND dr.region_name IS NOT NULL
+GROUP BY dr.restaurant_name, dr.category_name, dr.region_name
+ORDER BY total_orders DESC
+LIMIT 20;
+
+-- ============================================================
+-- 11. COMPREHENSIVE BUSINESS KPI SUMMARY
+-- ============================================================
+CREATE OR REPLACE VIEW warehouse.v_business_kpi_summary AS
+SELECT 
+    -- Order Metrics
+    os.total_orders,
+    os.avg_order_amount,
+    os.total_revenue,
+    os.delivery_rate_pct,
+    os.orders_with_tickets,
+    ROUND(
+        100.0 * os.orders_with_tickets / NULLIF(os.total_orders, 0), 2
+    ) AS ticket_rate_pct,
+    -- Ticket Metrics
+    ks.total_tickets,
+    ks.avg_first_response_minutes,
+    ks.avg_resolution_minutes,
+    ks.sla_first_response_breach_rate_pct,
+    ks.sla_resolution_breach_rate_pct,
+    ks.total_refund_amount,
+    ks.tickets_with_refund,
+    ks.avg_refund_amount,
+    -- Revenue Impact
+    ri.refund_impact_rate_pct,
+    ri.net_revenue,
+    -- Reopen Rate
+    tr.reopen_rate_pct
+FROM warehouse.v_order_summary os
+CROSS JOIN warehouse.v_kpi_summary ks
+CROSS JOIN warehouse.v_revenue_impact ri
+CROSS JOIN warehouse.v_ticket_reopen_rate tr;

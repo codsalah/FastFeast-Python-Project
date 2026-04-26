@@ -6,6 +6,7 @@
 
 # ── DATA DIRECTORIES ──────────────────────
 data/
+quarantine_exports/
 
 # ── LOGS ──────────────────────────────────
 logs/

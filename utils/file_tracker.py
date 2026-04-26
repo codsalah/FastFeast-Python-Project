@@ -3,16 +3,14 @@ pipeline/file_tracker.py
 ────────────────────────
 Idempotency layer for the FastFeast pipeline.
 
-Uses file_path + file_hash together as the idempotency key.
+Uses file_hash as the idempotency key.
 
-Same file path + same hash  → already processed → SKIP
-Same file path + new hash   → file regenerated  → PROCESS
-New file path               → new file          → PROCESS
+Same hash (same content)  → already processed → SKIP
+New hash (new content)    → file changed      → PROCESS
 
 The hash is computed from the file content using SHA-256
-before any parsing begins. This means even if a file is
-rewritten with the same name, it will be reprocessed only
-if the content actually changed.
+before any parsing begins. This prevents duplicate processing
+of the same file content regardless of file path or location.
 """
 
 from __future__ import annotations
@@ -56,13 +54,16 @@ def get_file_size_bytes(file_path: str) -> int:
 
 def is_file_processed(file_path: str, file_hash: str) -> bool:
     """
-    Return True if this exact file (same path AND same hash) was already
-    handled by the pipeline, either successfully or in a failed attempt.
+    Return True if a file with this hash was already handled by the pipeline,
+    either successfully or in a failed attempt.
+
+    Checks only by hash value to prevent duplicate processing of the same
+    file content regardless of file path.
     """
     # If file doesn't exist, it can't be processed
     if not os.path.exists(file_path):
         return False
-    
+
     # Wait if file is still being written
     if not is_file_stable(file_path):
         return False
@@ -71,12 +72,11 @@ def is_file_processed(file_path: str, file_hash: str) -> bool:
         cur.execute(
             """
             SELECT 1 FROM pipeline_audit.file_tracker
-            WHERE file_path = %s
-              AND file_hash = %s
+            WHERE file_hash = %s
               AND status IN ('success', 'failed')
             LIMIT 1
             """,
-            (file_path, file_hash)
+            (file_hash,)
         )
         row = cur.fetchone()
         already_done = row is not None
@@ -103,7 +103,7 @@ def register_file(
             INSERT INTO pipeline_audit.file_tracker
                 (file_path, file_hash, file_type, status, processed_at, pipeline_run_id)
             VALUES (%s, %s, %s, 'processing', now(), %s)
-            ON CONFLICT (file_path, file_hash) DO UPDATE
+            ON CONFLICT (file_hash) DO UPDATE
                 SET
                     status = 'processing',
                     processed_at = now(),
@@ -136,10 +136,9 @@ def mark_file_success(
                 records_loaded = %s,
                 records_quarantined = %s,
                 processed_at = now()
-            WHERE file_path = %s
-              AND file_hash = %s
+            WHERE file_hash = %s
             """,
-            (records_total, records_loaded, records_quarantined, file_path, file_hash)
+            (records_total, records_loaded, records_quarantined, file_hash)
         )
 
     logger.info(
@@ -159,10 +158,9 @@ def mark_file_failed(file_path: str, file_hash: str, error_message: str) -> None
             """
             UPDATE pipeline_audit.file_tracker
             SET status = 'failed', processed_at = now()
-            WHERE file_path = %s
-              AND file_hash = %s
+            WHERE file_hash = %s
             """,
-            (file_path, file_hash)
+            (file_hash,)
         )
 
     logger.warning("file_failed", file=file_path, hash=file_hash[:8], error=error_message)
