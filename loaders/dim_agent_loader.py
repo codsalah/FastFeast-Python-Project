@@ -1,6 +1,7 @@
 import pandas as pd
 import os
 from loaders.base_scd2_loader import BaseSCD2Loader
+from utils import PII_handler
 
 class DimAgentLoader(BaseSCD2Loader):
     def __init__(self, batch_dir: str = "data/master"):
@@ -18,6 +19,8 @@ class DimAgentLoader(BaseSCD2Loader):
     def load(self, df, batch_date, source_file, pipeline_run_id=None):
         teams = pd.read_csv(os.path.join(self.batch_dir, "teams.csv"))[["team_id", "team_name"]]
         df = df.merge(teams, on="team_id", how="left")
+        # PII Masking: agent_name -> first letter + *** (e.g. A. ***)
+        df["agent_name"] = PII_handler.partial_masking(df["agent_name"], keep_first=1)
         return super().load(df, batch_date, source_file, pipeline_run_id)
 
     def _build_insert_row(self, record, batch_date):
@@ -26,7 +29,7 @@ class DimAgentLoader(BaseSCD2Loader):
 
     def _build_update_fields(self, record):
         return {
-            "agent_name": record.get("agent_name"),
+            "agent_name": record.get("agent_name"),  # Already masked in load()
             "skill_level": record.get("skill_level"),
             "team_name": record.get("team_name"),
             "is_active": self._coerce_bool_like(record.get("is_active")),

@@ -1,13 +1,11 @@
 """
 pipelines/stream_pipeline.py
-Routes micro-batch stream files to the correct fact loaders.
-
-Responsibility: load stream fact files (orders, tickets, events).
-                Nothing about batch dimensions or watcher threads.
+Stream fact loads.
 
 Modes:
   process_single_hour(date, hour)  — one-off load for a single hour folder
-  RealStreamProcessor              — reusable processor handed to pollers by watcher.py
+  process_pending_stream_files()   — poll-friendly scanner for new stream files
+  RealStreamProcessor              — routes each file to fact loaders
 
 Run via: python main.py stream --date YYYY-MM-DD --hour H
 """
@@ -19,38 +17,29 @@ from datetime import date
 
 from config.settings import Settings, get_settings
 from loaders import fact_events_loader, fact_orders_loader, fact_tickets_loader
-from pipelines.stream_watcher import STREAM_FILES
 from quality import metrics_tracker as audit_trail
-from utils.logger import configure_logging, get_logger_name
+from utils.file_utils import is_file_stable
+from utils.logger import configure_logging, get_logger_name, log_stage_start
 from warehouse.connection import close_pool, init_pool
 
 logger = get_logger_name(__name__)
 
+STREAM_FILES = [
+    "orders.json",
+    "tickets.csv",
+    "ticket_events.json",
+]
+
 
 class RealStreamProcessor:
-    """
-    Routes a stream file to the correct fact loader.
-
-    This class is intentionally unaware of batch files or watcher threads.
-    It is instantiated by watcher.py (for continuous mode) and by
-    process_single_hour() (for one-off mode).
-    """
+    """Routes a stream file to the correct fact loader."""
 
     def __init__(self, run_id: int):
-        self.run_id          = run_id
+        self.run_id = run_id
         self.processed_count = 0
 
-    def process(self, filepath: str, file_type: str = "stream") -> None:
+    def process(self, filepath: str) -> None:
         filename = os.path.basename(filepath)
-
-        # Batch files are not this processor's concern
-        if file_type == "batch":
-            logger.warning(
-                "batch_file_detected_in_stream_processor",
-                file=filename,
-                hint="Run: python main.py batch --date YYYY-MM-DD",
-            )
-            return
 
         if audit_trail.is_file_processed(filepath):
             logger.info("file_skipped", file=filename, reason="already_processed")
@@ -72,6 +61,56 @@ class RealStreamProcessor:
             logger.error("stream_processor_failed", file=filename, error=str(e))
 
 
+def process_pending_stream_files(
+    *,
+    stream_base_dir: str,
+    processor: RealStreamProcessor,
+    target_date: date | None = None,
+) -> int:
+    """
+    Process all currently available and stable stream files for one date.
+
+    Returns:
+        Number of files successfully processed in this scan.
+    """
+    process_date = target_date or date.today()
+    stream_dir = os.path.join(stream_base_dir, process_date.isoformat())
+    processed_before = processor.processed_count
+
+    if not os.path.exists(stream_dir):
+        return 0
+
+    try:
+        hour_folders = sorted(
+            f for f in os.listdir(stream_dir) if os.path.isdir(os.path.join(stream_dir, f))
+        )
+    except OSError as e:
+        logger.error("stream_dir_read_failed", dir=stream_dir, error=str(e))
+        return 0
+
+    for hour_folder in hour_folders:
+        hour_path = os.path.join(stream_dir, hour_folder)
+        for filename in STREAM_FILES:
+            filepath = os.path.join(hour_path, filename)
+            if not os.path.exists(filepath):
+                continue
+            if audit_trail.is_file_processed(filepath):
+                continue
+            if not is_file_stable(filepath):
+                logger.debug("stream_file_still_writing", file=filepath, hour=hour_folder)
+                continue
+            log_stage_start(
+                logger,
+                stage_name="file_detection",
+                file=filepath,
+                poller="stream",
+                hour=hour_folder,
+            )
+            processor.process(filepath)
+
+    return processor.processed_count - processed_before
+
+
 def process_single_hour(
     target_date: date,
     target_hour: int,
@@ -80,20 +119,17 @@ def process_single_hour(
     manage_pool: bool = True,
 ) -> None:
     """
-    Load all stream files under stream_input_dir/<date>/<HH>/ in one shot.
+    Load all stream files under stream_input_dir/<date>/<HH>/.
 
     Args:
-        target_date: Date folder to process.
-        target_hour: Hour folder to process (0-23).
-        settings:    Falls back to get_settings() if None.
-        manage_pool: When False the caller (Orchestrator) already owns the pool.
+        manage_pool: When False, the caller already owns the DB pool (e.g. main.py).
     """
     settings = settings or get_settings()
     if manage_pool:
         init_pool(settings)
 
     audit_trail.ensure_audit_schema()
-    run_id    = audit_trail.start_run("stream_one_off")
+    run_id = audit_trail.start_run("stream")
     processor = RealStreamProcessor(run_id=run_id)
 
     stream_dir = os.path.join(
@@ -105,7 +141,15 @@ def process_single_hour(
     if not os.path.exists(stream_dir):
         logger.error("stream_dir_missing", dir=stream_dir)
         audit_trail.complete_run(
-            run_id, "failed", 0, 0, 0, 0, 0, 0, 0,
+            run_id,
+            "failed",
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
             error_message="stream dir not found",
         )
         if manage_pool:
@@ -117,22 +161,23 @@ def process_single_hour(
         filepath = os.path.join(stream_dir, filename)
         if os.path.exists(filepath):
             files_found += 1
-            processor.process(filepath, "stream")
+            processor.process(filepath)
 
     totals = audit_trail.get_run_record_totals(run_id)
+    file_totals = audit_trail.get_run_file_totals(run_id)
     audit_trail.complete_run(
         run_id,
         "success",
-        files_found,
-        processor.processed_count,
-        max(0, files_found - processor.processed_count),
+        file_totals["total_files"],
+        file_totals["successful_files"],
+        file_totals["failed_files"],
         totals["total_records"],
         totals["total_loaded"],
         totals["total_quarantined"],
         totals["total_orphaned"],
     )
     logger.info(
-        "stream_one_off_complete",
+        "stream_hour_complete",
         date=str(target_date),
         hour=target_hour,
         files_found=files_found,
@@ -146,10 +191,12 @@ def process_single_hour(
 
 if __name__ == "__main__":
     import argparse
+
     parser = argparse.ArgumentParser(description="Stream pipeline — one-off hour load")
     parser.add_argument("--date", type=date.fromisoformat, required=True)
     parser.add_argument("--hour", type=int, required=True, help="Hour folder 0-23")
     args = parser.parse_args()
 
-    configure_logging(log_dir="logs", level="INFO")
+    settings = get_settings()
+    configure_logging(log_dir=settings.log_dir, level=settings.log_level)
     process_single_hour(args.date, args.hour, manage_pool=True)

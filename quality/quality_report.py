@@ -105,6 +105,8 @@ def _fetch_extra_counts(run_id: int) -> dict[str, Any]:
 
     return {
         "quarantine_count": int(q.get("quarantine_count") or 0),
+        # orphan_tracking is global backlog state (not scoped by run_id in current schema).
+        "orphan_scope": "global_backlog",
         "orphans_unresolved": int(o.get("orphans_unresolved") or 0),
         "orphans_resolved": int(o.get("orphans_resolved") or 0),
         "quarantine_by_type": quarantine_by_type,
@@ -215,6 +217,9 @@ def _section_validation_statistics(styles, metrics: list[dict[str, Any]]) -> lis
 
     rows = []
     for m in metrics:
+        details = m.get("quality_details") or {}
+        inserted = details.get("inserted")
+        loaded_value = inserted if inserted is not None else (m.get("valid_records", 0) or 0)
         src = (m.get("source_file", "") or "")[-35:]
         if len(src) >= 35:
             src = "..." + src[-32:]
@@ -222,13 +227,13 @@ def _section_validation_statistics(styles, metrics: list[dict[str, Any]]) -> lis
             m.get("table_name", "")[:18],
             src,
             str(m.get("total_records", 0)),
-            str(m.get("valid_records", 0)),
+            str(loaded_value),
             str(m.get("quarantined_records", 0)),
             str(m.get("null_violations", 0)),
             str(m.get("duplicate_count", 0)),
         ])
 
-    header = ["Table", "Source File", "Total", "Valid", "Quar.", "Null", "Dup"]
+    header = ["Table", "Source File", "Total", "Loaded", "Quar.", "Null", "Dup"]
     t = Table([header] + rows, colWidths=[70, 140, 45, 45, 45, 45, 45], repeatRows=1)
     t.setStyle(TableStyle([
         ("BACKGROUND", (0, 0), (-1, 0), colors.HexColor("#374151")),
@@ -368,11 +373,12 @@ def _section_orphan_summary(styles, summary: dict[str, Any], extra: dict[str, An
     
     orphan_rate = (total_orphaned / total_records * 100) if total_records > 0 else 0
     
+    scope_note = "Global orphan backlog state (cross-run)."
     rows = [
         ["Total orphaned records", f"{total_orphaned:,}", "Records with invalid FK references"],
         ["Orphan rate", f"{orphan_rate:.2f}%", "% of records with orphan references"],
-        ["Orphans unresolved", f"{orphans_unresolved:,}", "Orphans awaiting resolution"],
-        ["Orphans resolved", f"{orphans_resolved:,}", "Orphans successfully resolved"],
+        ["Orphans unresolved", f"{orphans_unresolved:,}", f"Unresolved orphan rows ({scope_note})"],
+        ["Orphans resolved", f"{orphans_resolved:,}", f"Resolved orphan rows ({scope_note})"],
         ["Resolution success rate", f"{(orphans_resolved / total_orphaned * 100):.1f}%" if total_orphaned > 0 else "N/A", "% of orphans resolved"],
     ]
 
@@ -401,7 +407,7 @@ def _section_rejected_summary(styles, extra: dict[str, Any]) -> list:
     rows_bt = extra.get("quarantine_by_type") or []
     if not rows_bt:
         return [
-            Paragraph("<b>Rejected data summary</b>", styles["Heading2"]),
+            Paragraph("<b>4. Rejected data summary</b>", styles["Heading2"]),
             Spacer(1, 6),
             Paragraph("No quarantined rows linked to this run_id.", styles["Normal"]),
         ]
@@ -421,7 +427,7 @@ def _section_rejected_summary(styles, extra: dict[str, Any]) -> list:
         )
     )
     return [
-        Paragraph("<b>Rejected data summary</b> <i>(quarantine by error_type)</i>", styles["Heading2"]),
+        Paragraph("<b>4. Rejected data summary</b> <i>(quarantine by error_type)</i>", styles["Heading2"]),
         Spacer(1, 6),
         Paragraph(
             "<i>Counts are for records stored in pipeline_audit.quarantine with this run_id. "

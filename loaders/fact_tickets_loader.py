@@ -41,6 +41,7 @@ from utils.retry import db_retry
 from utils.timing import StageTimer
 from validators.schema_registry import get_contract
 from validators.schema_validator import partition_critical_validation_rows, validate_entity
+from quality import metrics_tracker as audit_trail
 from warehouse.connection import execute_values, get_dict_cursor
 
 logger   = get_logger_name(__name__)
@@ -271,6 +272,20 @@ def load(file_path: str, run_id: int) -> None:
             df = reader(file_path)
             if df is None or df.empty:
                 mark_file_success(file_path, file_hash, 0, 0, 0)
+                audit_trail.write_quality_metrics(
+                    run_id=run_id,
+                    table_name="fact_tickets",
+                    source_file=file_path,
+                    total_records=0,
+                    valid_records=0,
+                    quarantined_records=0,
+                    orphaned_records=0,
+                    duplicate_count=0,
+                    null_violations=0,
+                    business_rule_violations=0,
+                    processing_latency_sec=0.0,
+                    quality_details={"inserted": 0},
+                )
                 return
         except Exception as e:
             mark_file_failed(file_path, file_hash, str(e))
@@ -288,6 +303,7 @@ def load(file_path: str, run_id: int) -> None:
             return
         bad  = df.loc[bad_labels] if bad_labels else pd.DataFrame()
         good = df.drop(index=bad_labels) if bad_labels else df.copy()
+        schema_quarantined = len(bad)
 
         if not bad.empty:
             errors_by_row: dict = defaultdict(list)
@@ -312,10 +328,26 @@ def load(file_path: str, run_id: int) -> None:
 
         if good.empty:
             mark_file_success(file_path, file_hash, total, 0, len(bad))
+            audit_trail.write_quality_metrics(
+                run_id=run_id,
+                table_name="fact_tickets",
+                source_file=file_path,
+                total_records=total,
+                valid_records=total - schema_quarantined,
+                quarantined_records=schema_quarantined,
+                orphaned_records=0,
+                duplicate_count=0,
+                null_violations=0,
+                business_rule_violations=0,
+                processing_latency_sec=0.0,
+                quality_details={"inserted": 0},
+            )
             return
 
         # ── 5. Deduplicate within file ────────────────────────────────────
+        pre_dedup_count = len(good)
         good = good.drop_duplicates("ticket_id").copy()
+        duplicate_count = pre_dedup_count - len(good)
 
         # ── 6. Resolve surrogate keys + SLA computation ───────────────────
         maps              = _build_dim_maps()
@@ -345,6 +377,20 @@ def load(file_path: str, run_id: int) -> None:
         if good.empty:
             quarantined = len(bad) + len(fk_quarantine)
             mark_file_success(file_path, file_hash, total, 0, quarantined)
+            audit_trail.write_quality_metrics(
+                run_id=run_id,
+                table_name="fact_tickets",
+                source_file=file_path,
+                total_records=total,
+                valid_records=0,
+                quarantined_records=quarantined,
+                orphaned_records=0,
+                duplicate_count=duplicate_count,
+                null_violations=0,
+                business_rule_violations=0,
+                processing_latency_sec=0.0,
+                quality_details={"inserted": 0},
+            )
             return
 
         # ── 7. Insert into warehouse ──────────────────────────────────────
@@ -382,6 +428,25 @@ def load(file_path: str, run_id: int) -> None:
         # ── 8. Mark file as done ──────────────────────────────────────────
         quarantined = len(bad) + len(fk_quarantine)
         mark_file_success(file_path, file_hash, total, inserted, quarantined)
+        audit_trail.write_quality_metrics(
+            run_id=run_id,
+            table_name="fact_tickets",
+            source_file=file_path,
+            total_records=total,
+            # Keep metrics aligned with file_tracker.records_loaded and actual DB writes.
+            valid_records=inserted,
+            quarantined_records=quarantined,
+            orphaned_records=0,
+            duplicate_count=duplicate_count,
+            null_violations=0,
+            business_rule_violations=0,
+            processing_latency_sec=round(timer.duration_ms / 1000.0, 3),
+            quality_details={
+                "inserted": inserted,
+                "schema_quarantined": schema_quarantined,
+                "fk_quarantined": len(fk_quarantine),
+            },
+        )
 
         log_stage_complete(
             logger, "fact_tickets_load",

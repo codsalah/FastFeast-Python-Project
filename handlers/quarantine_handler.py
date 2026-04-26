@@ -2,6 +2,7 @@ import json
 import logging
 import math
 import psycopg2.extras
+from typing import Any, Literal
 
 import pandas as pd
 import numpy as np
@@ -9,7 +10,6 @@ import numpy as np
 from warehouse.connection import get_cursor
 from utils.retry import db_retry
 from utils.logger import get_logger_name
-from utils.pii_policy import sanitize_record
 
 logger = get_logger_name(__name__)
 
@@ -86,8 +86,8 @@ def send_to_quarantine(
 
     safe_orphan_id = str(raw_orphan_id) if raw_orphan_id is not None else None
 
-    # PII policy then JSON-safe numeric cleanup for jsonb
-    sanitized_record = _sanitize_record(sanitize_record(entity_type, raw_record or {}))
+    # JSON-safe numeric cleanup for jsonb (PII handled upstream in loaders)
+    sanitized_record = _sanitize_record(raw_record or {})
 
     try:
         with get_cursor() as cur:
@@ -144,7 +144,7 @@ def send_batch_to_quarantine(failed_records: list[dict]) -> int:
         raw_orphan_id = rec.get("raw_orphan_id")
         raw_record = rec.get("raw_record", {})
         entity_type = rec.get("entity_type", "unknown")
-        sanitized_record = _sanitize_record(sanitize_record(entity_type, raw_record))
+        sanitized_record = _sanitize_record(raw_record)
         rows.append((
             rec.get("source_file",    "unknown"),
             rec.get("entity_type",    "unknown"),

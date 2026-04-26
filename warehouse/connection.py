@@ -43,9 +43,8 @@ def init_pool(settings: Settings) -> None:
         minconn=settings.db.pool_min,
         maxconn=settings.db.pool_max,
         dsn=settings.db.dsn,
-        connect_timeout=10,
-        # Kill any query that runs longer than 240 s (TO BE TUNED)
-        options="-c statement_timeout=240000",
+        connect_timeout=settings.db_connect_timeout_sec,
+        options=f"-c statement_timeout={settings.db_statement_timeout_ms}",
     )
     logger.info(
         "db_pool_initialised",
@@ -80,7 +79,7 @@ def health_check() -> bool:
     Verify the pool can reach PostgreSQL.
 
     Returns True on success, False on any error.
-    Used by the orchestrator at startup before the first pipeline run.
+    Used by main.py / config.runtime at startup before the first pipeline run.
     """
     try:
         with get_cursor() as cur:

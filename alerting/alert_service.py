@@ -187,13 +187,16 @@ def _send_report_email(subject: str, message: str, pdf_bytes: bytes, filename: s
 
         body = f"""
 FastFeast Daily Quality Report
-=============================
-Run ID : {run_id or 'N/A'}
-Time   : {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}
+==============================
+Run ID: {run_id or 'N/A'}
+Generated At: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}
 
 {message}
 
--- FastFeast Pipeline
+This email contains an aggregate quality report attachment for operational review.
+
+Regards,
+FastFeast Data Platform
         """.strip()
         msg.attach(MIMEText(body, "plain"))
 

@@ -1,3 +1,4 @@
+# NOT USED IN PROJECT - SAFE TO REMOVE
 # utils/config_loader.py
 # ─────────────────────────────────────────────
 # This file does three things:
