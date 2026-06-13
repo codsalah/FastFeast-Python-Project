@@ -1,6 +1,6 @@
 <div align="center">
 
-<img src="assets/banner.svg" alt="FastFeast Data Platform" width="100%"/>
+<img src="assets/banner.png" alt="FastFeast Data Platform" width="100%"/>
 
 ### *A production-grade data platform that doesn't pretend your data is clean*
 
