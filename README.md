@@ -1,524 +1,577 @@
-# FastFeast — Food Delivery Data Pipeline
+<div align="center">
 
-> A production-grade **OLTP → OLAP** pipeline for a simulated Egyptian food delivery platform.  
-> Ingests daily dimension snapshots and hourly transaction streams, loads a PostgreSQL star-schema warehouse, and serves a Streamlit analytics dashboard.
+<img src="assets/banner.svg" alt="FastFeast Data Platform" width="100%"/>
 
----
+### *A production-grade data platform that doesn't pretend your data is clean*
 
-## Table of Contents
+**Batch · Stream · SCD2 · Orphan Backfill · Audit Trails · Quarantine · OLAP Views · Streamlit**
 
-1. [Architecture Overview](#architecture-overview)
-2. [Quick Start](#quick-start)
-3. [Pipeline Concepts](#pipeline-concepts)
-   - [Batch vs. Stream](#batch-vs-stream)
-   - [SCD2 — Slowly Changing Dimensions](#scd2--slowly-changing-dimensions)
-   - [Orphan Lifecycle](#orphan-lifecycle)
-   - [Validation Stages](#validation-stages)
-   - [Idempotency](#idempotency)
-4. [Warehouse Schema](#warehouse-schema)
-5. [CLI Reference](#cli-reference)
-6. [Input File Reference](#input-file-reference)
-7. [Configuration](#configuration)
-8. [Project Structure](#project-structure)
-9. [Data Generators](#data-generators)
-10. [Testing](#testing)
-11. [Troubleshooting](#troubleshooting)
+<br/>
+
+[![Python](https://img.shields.io/badge/Python-3.11+-3776AB?style=for-the-badge&logo=python&logoColor=white)](https://www.python.org/)
+[![PostgreSQL](https://img.shields.io/badge/Warehouse-PostgreSQL-4169E1?style=for-the-badge&logo=postgresql&logoColor=white)](https://www.postgresql.org/)
+[![Docker](https://img.shields.io/badge/Runtime-Docker%20Compose-2496ED?style=for-the-badge&logo=docker&logoColor=white)](https://www.docker.com/)
+[![Streamlit](https://img.shields.io/badge/Dashboard-Streamlit-FF4B4B?style=for-the-badge&logo=streamlit&logoColor=white)](https://streamlit.io/)
+[![pytest](https://img.shields.io/badge/Tests-pytest-0A9EDC?style=for-the-badge&logo=pytest&logoColor=white)](https://docs.pytest.org/)
+[![Pydantic](https://img.shields.io/badge/Config-Pydantic-E92063?style=for-the-badge&logo=pydantic&logoColor=white)](https://docs.pydantic.dev/)
+
+<br/>
+
+[Why It Stands Out](#-why-it-stands-out) · [Architecture](#-architecture) · [Warehouse Design](#-warehouse-design) · [Orphan Lifecycle](#-late-arriving-dimensions-the-orphan-lifecycle) · [Data Quality](#-data-quality--auditability) · [Quick Start](#-quick-start) · [Dashboard](#-dashboard) · [Testing](#-testing)
+
+</div>
 
 ---
 
-## Architecture Overview
+> **Most portfolio pipelines stop at "load CSV into a table."**
+> FastFeast models the operational problems that make *real* data platforms hard — late-arriving facts, schema mismatches, duplicate runs, invalid records, and the audit trails that prove everything worked.
+
+---
+
+## 🏆 Why It Stands Out
+
+| Real-World Problem | What FastFeast Does |
+|---|---|
+| Facts arrive before their dimension parents | Facts load with `-1` unknown keys; orphan tracker stores the raw foreign id for later resolution |
+| Dimensions change over time | SCD Type 2 loaders preserve full attribute history — no silent overwrites |
+| Files get accidentally reprocessed | SHA-256 file hashing + `file_tracker` table make every load idempotent |
+| Invalid source records corrupt analytics | Validation layer quarantines bad rows as JSON — inspectable, not lost |
+| Operators can't explain what ran | Every run writes to `pipeline_run_log`, `file_tracker`, and `pipeline_quality_metrics` |
+| Analysts want clean, analysis-ready tables | `orders_clean` view always exposes the **latest trusted version** of each order |
+| Reviewers can't reproduce the project locally | Docker Compose + CLI commands + synthetic generators make the demo reproducible |
+
+---
+
+## ⚡ At a Glance
 
 ```
-╔════════════════════════════════════════════════════════════════════╗
-║  SOURCES (simulated OLTP exports)                                  ║
-║  Batch (daily)               Stream (hourly)                       ║
-║  customers / drivers /       orders / tickets /                    ║
-║  restaurants / agents        ticket events                         ║
-╚══════════════╤═══════════════════════════╤═════════════════════════╝
-               │                           │
-               ▼                           ▼
-      ┌─────────────────┐       ┌────────────────────┐
-      │  Schema         │       │  Schema            │
-      │  Validator      │       │  Validator         │
-      │  (38 contracts) │       │  (3 schemas)       │
-      └────────┬────────┘       └──────────┬─────────┘
-               │ quarantine bad            │ quarantine bad
-               ▼                           ▼
-      ┌─────────────────┐        ┌─────────────────────┐
-      │  SCD2 Loaders   │        │  Fact Loaders       │
-      │  detect changes │        │  orphan FK → -1     │
-      │  version history│        │  surrogate resolve  │
-      └────────┬────────┘        │  SLA flag calculate │
-               │                 └─────────┬───────────┘
-               └────────────┬──────────────┘
-                            │
-                            ▼
-                  ┌─────────────────────┐
-                  │  Reconciliation Job │◄── auto-runs after batch
-                  │  resolve orphans    │
-                  │  insert v2 fact rows│
-                  └──────────┬──────────┘
-                             │
-                             ▼
-                  ┌─────────────────────┐
-                  │  PostgreSQL         │
-                  │  Warehouse          │
-                  │  warehouse.*        │
-                  │  pipeline_audit.*   │
-                  └──────────┬──────────┘
-                             │
-                             ▼
-                  ┌─────────────────────┐
-                  │  Streamlit          │
-                  │  Dashboard          │
-                  │  localhost:8501     │
-                  └─────────────────────┘
-```
-
-**Key design principles:**
-- The pipeline **never halts** on bad data — corrupt or unresolvable records are quarantined, not dropped silently.
-- Execution is **idempotent** — running the same file twice produces the same result (no duplicates).
-- Orphaned facts are **loaded immediately** with a placeholder FK (`-1`) and corrected automatically once the dimension arrives.
-
----
-
-## Quick Start
-
-**Prerequisites:** Python 3.11+, Docker + Docker Compose
-
-```bash
-# 1. Clone and install
-git clone <repo-url> && cd FastFeast-Python-Project
-python -m venv .venv && source .venv/bin/activate
-pip install -r requirements.txt
-
-# 2. Configure secrets
-cp .env.example .env
-# Set POSTGRES_PASSWORD and generate a PII pepper:
-python -c "import secrets; print(secrets.token_hex(32))"
-# Paste the output as PII_HASH_PEPPER in .env
-
-# 3. Start PostgreSQL
-docker-compose up -d
-
-# 4. Initialise the warehouse (DDL + seed Unknown-member rows)
-python main.py init-db --with-seed
-
-# 5. Generate synthetic data and run the pipeline for one day
-python data_generators/generate_master_data.py
-python data_generators/generate_batch_data.py --date 2026-04-10
-python main.py batch --date 2026-04-10
-
-python data_generators/generate_stream_data.py --date 2026-04-10 --hour 12
-python main.py stream --date 2026-04-10 --hour 12
-
-# 6. Verify everything passed
-python tests/test_pipeline_full.py --date 2026-04-10 --reset
-# Expected: PASSED: 62  WARNED: 0  FAILED: 0
-
-# 7. Launch the analytics dashboard
-python main.py analytics setup      # run once to create OLAP views
-python main.py analytics dashboard  # open http://localhost:8501
+8 Dimension Tables   ·   3 Fact Tables   ·   5 Audit Tables   ·   7 Analytics Views
+38 Validation Contracts   ·   Batch + Stream pipelines   ·   SCD2 + Orphan Backfill
 ```
 
 ---
 
-## Pipeline Concepts
+## 🏗️ Architecture
 
-### Batch vs. Stream
+```mermaid
+flowchart LR
+    subgraph Sources["🗄️ Synthetic OLTP Exports"]
+        Master["Master Data"]
+        BatchFiles["Daily Batch Files\ncustomers · drivers · restaurants · agents · reference"]
+        StreamFiles["Hourly Stream Files\norders · tickets · ticket_events"]
+    end
 
-| | Batch | Stream |
-|---|---|---|
-| **Frequency** | Once per day | Multiple times per hour |
-| **Content** | Full dimension snapshots | Incremental transaction records |
-| **Input directory** | `data/input/batch/YYYY-MM-DD/` | `data/input/stream/YYYY-MM-DD/HH/` |
-| **Loads** | `dim_*` tables | `fact_orders`, `fact_tickets`, `fact_ticket_events` |
-| **Key concern** | SCD change detection | Orphan FK resolution |
+    subgraph Validation["🛡️ Validation + Routing"]
+        Contracts["38 Schema Contracts"]
+        QuarantinePath["Quarantine Path"]
+        FileTracker["File Tracker\n(SHA-256 dedup)"]
+    end
 
-Batch runs first each day; the reconciliation job fires automatically afterwards to resolve any orphans that the stream loaded earlier with a `-1` placeholder.
+    subgraph Loaders["⚙️ Python Loading Layer"]
+        BatchPipeline["Batch Pipeline"]
+        SCD2["SCD2 + Static Dimension Loaders"]
+        StreamPipeline["Stream Pipeline"]
+        FactLoaders["Fact Loaders"]
+    end
 
----
+    subgraph Warehouse["🏛️ PostgreSQL Warehouse"]
+        Dims["8 Dimension Tables"]
+        Facts["3 Fact Tables"]
+        Audit["5 Audit Tables"]
+        Views["7 Analytics Views"]
+    end
 
-### SCD2 — Slowly Changing Dimensions
+    subgraph Analytics["📊 Consumption"]
+        Reconcile["Orphan Reconciliation + Backfill"]
+        Dashboard["Streamlit Dashboard"]
+        Reports["PDF Quality Report + Optional Email"]
+    end
 
-When a **tracked field** changes on a dimension (e.g. a customer moves region), the pipeline:
-
-1. **Closes** the old row by setting `valid_to = today` and `is_current = false`.
-2. **Inserts** a new row with `valid_from = today`, `valid_to = NULL`, and `is_current = true`.
-
-This preserves the full history so analytical queries can reconstruct "what did we know at the time of an order?".
-
-| Dimension | Tracked (SCD2) — creates new version | In-place (SCD1) — overwrites |
-|---|---|---|
-| `dim_customer` | `segment_name`, `region_name` | — |
-| `dim_driver` | `is_active`, `region_name` | — |
-| `dim_restaurant` | `is_active`, `price_tier` | `rating_avg` |
-| `dim_agent` | `team_name`, `skill_level`, `is_active` | — |
-
-Static dimensions (`dim_reason`, `dim_channel`, `dim_priority`, `dim_date`) never version — they use their natural keys as primary keys.
-
----
-
-### Orphan Lifecycle
-
-A stream fact (e.g. an order) may arrive **before** its dimension row is loaded by batch. The pipeline never blocks ingestion — it follows three automatic steps:
-
-```
-STEP 1 — Detect (during stream load)
-  └─► Missing FK? Set to -1. Save raw source ID. Write row to orphan_tracking.
-
-STEP 2 — Reconcile (auto-runs after each batch)
-  └─► Dimension has now arrived? Mark orphan as resolved in orphan_tracking.
-
-STEP 3 — Backfill (post-reconcile)
-  └─► Insert fact_orders v2 with the real FK.
-      Both v1 (audit) and v2 (corrected) are kept.
-```
-
-**Analysts always query `warehouse.orders_clean`**, a view that returns only the latest version per order:
-
-```sql
--- orders_clean automatically hides v1 if v2 exists
-SELECT * FROM warehouse.orders_clean WHERE order_id = 'abc-123';
-```
-
-If an orphan is not resolved within 3 retries (i.e. after 3 batch runs), it is moved to `pipeline_audit.quarantine`.
-
----
-
-### Validation Stages
-
-Every file passes through three validation stages before any data reaches the warehouse:
-
-| Stage | Checks | On failure |
-|---|---|---|
-| **Structural** | Required columns present, correct file format | Entire file rejected |
-| **Critical** | Type correctness, null constraints, value ranges, regex patterns | Single row quarantined |
-| **Logical** | Cross-field business rules (e.g. `delivered_at > order_created_at`) | Row loads; violation counted in quality metrics |
-
-38 schema contracts cover every input entity. Quarantined records are stored in `pipeline_audit.quarantine` as full JSON with error details, so they can be inspected and reprocessed.
-
-```sql
--- Inspect recent quarantine reasons
-SELECT entity_type, error_details, COUNT(*)
-FROM pipeline_audit.quarantine
-GROUP BY entity_type, error_details
-ORDER BY count DESC;
+    Master --> BatchFiles
+    Master --> StreamFiles
+    BatchFiles --> Contracts
+    StreamFiles --> Contracts
+    Contracts --> BatchPipeline
+    Contracts --> StreamPipeline
+    Contracts --> QuarantinePath
+    BatchPipeline --> SCD2 --> Dims
+    StreamPipeline --> FactLoaders --> Facts
+    BatchPipeline --> FileTracker --> Audit
+    StreamPipeline --> FileTracker
+    QuarantinePath --> Audit
+    Facts --> Reconcile
+    Dims --> Reconcile
+    Reconcile --> Facts
+    Dims --> Views
+    Facts --> Views
+    Audit --> Reports
+    Views --> Dashboard
 ```
 
 ---
 
-### Idempotency
+## 🔄 Pipeline Story
 
-The pipeline uses two layers to guarantee running the same file twice has no effect:
+```mermaid
+sequenceDiagram
+    participant G as 🏭 Data Generators
+    participant B as 📦 Batch Pipeline
+    participant S as ⚡ Stream Pipeline
+    participant W as 🏛️ Warehouse
+    participant A as 🗂️ Audit Schema
+    participant R as 🔧 Reconciliation Job
+    participant D as 📊 Dashboard
 
-1. **File level** — SHA-256 hash of the file is stored in `file_tracker` before parsing begins. Same hash → file is skipped entirely.
-2. **Row level** — All fact inserts use `ON CONFLICT DO NOTHING`.
+    G->>B: Daily dimension snapshot
+    B->>A: Start run · register files
+    B->>W: Load SCD2 / static dimensions
+    B->>A: Write quality metrics
+    B->>R: Trigger orphan reconciliation
+    G->>S: Hourly orders / tickets / events
+    S->>A: Start run · register files
+    S->>W: Load facts (with -1 fallback)
+    S->>A: Track orphans · quarantine failures
+    R->>W: Insert repaired fact_orders versions
+    W->>D: Serve OLAP views to dashboard
+```
 
 ---
 
-## Warehouse Schema
+## 🏛️ Warehouse Design
 
-### Star Schema Overview
+FastFeast separates concerns cleanly: `warehouse` schema for analytical data, `pipeline_audit` schema for operational metadata.
 
+```mermaid
+erDiagram
+    DIM_DATE ||--o{ FACT_ORDERS : date_key
+    DIM_CUSTOMER ||--o{ FACT_ORDERS : customer_key
+    DIM_DRIVER ||--o{ FACT_ORDERS : driver_key
+    DIM_RESTAURANT ||--o{ FACT_ORDERS : restaurant_key
+    FACT_ORDERS ||--o{ FACT_TICKETS : order_key
+    DIM_CUSTOMER ||--o{ FACT_TICKETS : customer_key
+    DIM_DRIVER ||--o{ FACT_TICKETS : driver_key
+    DIM_RESTAURANT ||--o{ FACT_TICKETS : restaurant_key
+    DIM_AGENT ||--o{ FACT_TICKETS : agent_key
+    DIM_REASON ||--o{ FACT_TICKETS : reason_id
+    DIM_PRIORITY ||--o{ FACT_TICKETS : priority_id
+    DIM_CHANNEL ||--o{ FACT_TICKETS : channel_id
+    DIM_DATE ||--o{ FACT_TICKETS : date_key
+    FACT_TICKETS ||--o{ FACT_TICKET_EVENTS : ticket_key
+    DIM_AGENT ||--o{ FACT_TICKET_EVENTS : agent_key
+    DIM_DATE ||--o{ FACT_TICKET_EVENTS : date_key
 ```
-                      dim_date
-                          │
-dim_customer ─────────────┤
-dim_driver   ─────────────┼──► fact_orders ──────────► fact_tickets ──► fact_ticket_events
-dim_restaurant ───────────┤                                  │
-                          │                             dim_agent
-                    dim_priority                        dim_reason
-                    dim_channel                         dim_priority
-                                                        dim_channel
-```
+
+### Warehouse Objects
+
+| Layer | Count | Objects |
+|---|:---:|---|
+| **Dimensions** | 8 | Date · Customer · Driver · Restaurant · Agent · Reason · Channel · Priority |
+| **Facts** | 3 | Orders · Support Tickets · Ticket Status Events |
+| **Audit Tables** | 5 | Pipeline runs · File hashes · Quality metrics · Orphan tracking · Quarantine |
+| **Analytics Views** | 7 | Clean orders · KPI summary · Location / Restaurant / Driver breakdowns · Reopen rate · Revenue impact |
+| **Validation Contracts** | 38 | Source entities · Warehouse targets · Audit schema expectations |
 
 ### Dimensions
 
-| Table | SCD Type | PK | Notes |
-|---|---|---|---|
-| `dim_date` | Type 0 (static) | `date_key` | One row per hour; covers 2020–2030 (~96,000 rows) |
-| `dim_customer` | Type 2 | `customer_key` | `-1` = Unknown member; PII masked |
-| `dim_driver` | Type 2 | `driver_key` | `-1` = Unknown member |
-| `dim_restaurant` | Type 2 + 1 | `restaurant_key` | `-1` = Unknown; `rating_avg` overwrites |
-| `dim_agent` | Type 2 | `agent_key` | PII masked; no `-1` seed needed |
-| `dim_reason` | Type 0 | `reason_id` | ~10 rows; natural key as PK |
-| `dim_channel` | Type 0 | `channel_id` | 4 rows (app, chat, phone, email) |
-| `dim_priority` | Type 0 | `priority_id` | Holds SLA thresholds per priority level |
+| Table | Type | Notes |
+|---|:---:|---|
+| `warehouse.dim_date` | Static | Hourly granularity date dimension |
+| `warehouse.dim_customer` | **SCD2** | Includes `-1` unknown member for orphan facts |
+| `warehouse.dim_driver` | **SCD2** | Includes `-1` unknown member for orphan facts |
+| `warehouse.dim_restaurant` | **SCD2** | Includes `-1` unknown member for orphan facts |
+| `warehouse.dim_agent` | **SCD2** | Loaded from batch; no unknown seed row needed |
+| `warehouse.dim_reason` | Static | Support reason lookup |
+| `warehouse.dim_channel` | Static | Support channel lookup |
+| `warehouse.dim_priority` | Static | SLA priority lookup |
 
-### Fact Tables
+### Facts
 
-| Table | Grain | Key Notes |
+| Table | Grain | Key Design Decision |
 |---|---|---|
-| `fact_orders` | One row per order per version | `version=1` original; `version=2` backfilled after orphan resolved. Query via `orders_clean` view. |
-| `fact_tickets` | One row per ticket | SLA breach flags pre-calculated as booleans at insert time. |
-| `fact_ticket_events` | One row per status transition | Links to `fact_tickets`, not directly to orders. |
+| `warehouse.fact_orders` | One row per **order version** | `(order_id, version)` composite key enables non-destructive backfill |
+| `warehouse.fact_tickets` | One row per support ticket | Stores SLA breach flags and full timing metrics |
+| `warehouse.fact_ticket_events` | One row per status event | Captures transition sequence and agent linkage |
 
-### Audit Tables (`pipeline_audit.*`)
+---
 
-| Table | Purpose |
+## 🔁 Late-Arriving Dimensions: The Orphan Lifecycle
+
+This is the most distinctive engineering feature. Stream facts load immediately — even when their dimension parents haven't arrived yet. Nothing is blocked. Nothing is silently dropped.
+
+```mermaid
+flowchart TD
+    A["⚡ Stream order arrives"] --> B{"Parent dimension\nalready loaded?"}
+    B -->|✅ Yes| C["Load fact with real surrogate key"]
+    B -->|❌ No| D["Load fact with -1 unknown key\n(fact is NOT lost)"]
+    D --> E["📋 Store raw missing id\nin pipeline_audit.orphan_tracking"]
+    E --> F["📦 Next batch run loads new dimensions"]
+    F --> G{"Parent now\nexists?"}
+    G -->|✅ Yes| H["🔧 Insert new fact_orders version\nwith resolved surrogate key"]
+    G -->|❌ No| I["Increment retry_count"]
+    I --> J{"Retry limit\nexhausted?"}
+    J -->|🔄 No| F
+    J -->|🚫 Yes| K["Move to permanent quarantine\nwith full audit trail"]
+    H --> L["✨ orders_clean view\nexposes latest trusted version"]
+```
+
+> **Why this matters:** The pipeline preserves the original loaded fact row and inserts a *corrected version* rather than silently rewriting history. Every repair is traceable — you can always reconstruct what the warehouse believed at any point in time.
+
+---
+
+## 🔍 Data Quality & Auditability
+
+FastFeast keeps operational evidence for every important pipeline action. Nothing is ephemeral.
+
+| Audit Object | What It Captures |
 |---|---|
-| `pipeline_run_log` | One row per pipeline execution — status, file counts, record totals |
-| `file_tracker` | SHA-256 hash + status per file for idempotency |
-| `pipeline_quality_metrics` | Quarantine rate, null rate, orphan rate per entity per run |
-| `orphan_tracking` | Per-orphan resolution status and retry count |
-| `quarantine` | Full JSON of every rejected record with error details |
+| `pipeline_audit.pipeline_run_log` | Run type · status · timestamps · file counts · record totals · error message |
+| `pipeline_audit.file_tracker` | File path · SHA-256 hash · processing status · record counts |
+| `pipeline_audit.pipeline_quality_metrics` | Valid / quarantined / orphaned record counts · null rates · duplicate rates · business-rule violations |
+| `pipeline_audit.orphan_tracking` | Unresolved source ids · orphan type · retry count · resolution timestamp |
+| `pipeline_audit.quarantine` | Raw rejected record as JSON · error type · error details · source file |
+
+Validation contracts cover source entities, warehouse targets, and audit tables — enforcing required columns, data types, nullability rules, natural key uniqueness, categorical constraints, regex patterns, numeric ranges, and operational defaults.
+
+A contract in `validators/schema_registry.py` is an immutable `SchemaContract` composed of `ColumnContract` rules. For example, stream order contracts declare the natural key, required IDs, numeric ranges, timestamp fields, and nullable orphan metadata before records are allowed into the warehouse flow.
 
 ---
 
-## CLI Reference
+## 📊 Analytics Layer
 
-| Command | Description |
+The dashboard reads from purpose-built warehouse views, not raw tables. Application-side aggregation is eliminated.
+
+| View | Answers |
 |---|---|
-| `python main.py init-db` | Apply DDL; populate `dim_date` |
-| `python main.py init-db --with-seed` | Same + insert `-1` Unknown member rows **(required on first run)** |
-| `python main.py batch --date YYYY-MM-DD` | Load daily dimension snapshot |
-| `python main.py stream --date YYYY-MM-DD --hour HH` | Load one hour of fact files |
-| `python main.py stream --watch` | Continuous daemon — polls every 15–30 s |
-| `python main.py analytics setup` | Create the 6 OLAP views (run once) |
-| `python main.py analytics dashboard` | Launch Streamlit at `localhost:8501` |
+| `warehouse.orders_clean` | What is the latest trusted version of each order? |
+| `warehouse.v_kpi_summary` | Ticket volumes · SLA rates · response times · refund totals |
+| `warehouse.v_tickets_by_location` | Which regions and cities generate the most support load? |
+| `warehouse.v_tickets_by_restaurant` | Which restaurants are linked to higher ticket volume or refunds? |
+| `warehouse.v_tickets_by_driver` | Which drivers are linked to more SLA breaches? |
+| `warehouse.v_ticket_reopen_rate` | How often are tickets reopened after resolution? |
+| `warehouse.v_revenue_impact` | How much revenue is affected by refunds? |
 
 ---
 
-## Input File Reference
+## 📁 Repository Map
 
-### Batch — `data/input/batch/<YYYY-MM-DD>/`
-
-| File | Loads into | Format |
-|---|---|---|
-| `customers.csv` | `dim_customer` (SCD2) | CSV |
-| `drivers.csv` | `dim_driver` (SCD2) | CSV |
-| `restaurants.json` | `dim_restaurant` (SCD2) | JSON |
-| `agents.csv` | `dim_agent` (SCD2) | CSV |
-| `channels.csv` | `dim_channel` (static) | CSV |
-| `priorities.csv` | `dim_priority` (static) | CSV |
-| `reasons.csv` | `dim_reason` (static) | CSV |
-
-### Stream — `data/input/stream/<YYYY-MM-DD>/<HH>/`
-
-| File | Loads into | Format |
-|---|---|---|
-| `orders.json` | `fact_orders` | JSON |
-| `tickets.csv` | `fact_tickets` | CSV |
-| `ticket_events.json` | `fact_ticket_events` | JSON |
-
----
-
-## Configuration
-
-Copy `.env.example` to `.env` and edit before running.
-
-**Required:**
-
-```env
-POSTGRES_PASSWORD=your_password
-PII_HASH_PEPPER=<64-char hex — generate with: python -c "import secrets; print(secrets.token_hex(32))">
-```
-
-**Key optional settings:**
-
-```env
-BATCH_INPUT_DIR=data/input/batch
-STREAM_INPUT_DIR=data/input/stream
-
-DB_POOL_MIN=2
-DB_POOL_MAX=10
-
-MAX_ORPHAN_RATE=0.50       # alert if orphan rate exceeds 50%
-ALERTING_ENABLED=false     # set true + configure SMTP to enable email alerts
-```
-
-All settings are documented in `.env.example`.
-
----
-
-## Project Structure
-
-```
+```text
 FastFeast-Python-Project/
+├── main.py                         # CLI: init-db · batch · stream · analytics
+├── docker-compose.yml              # PostgreSQL + optional pgAdmin
+├── requirements.txt                # Runtime and test dependencies
 │
-├── main.py                        # CLI entrypoint (init-db | batch | stream | analytics)
-│
-├── config/
-│   ├── settings.py                # Pydantic settings model (reads .env)
-│   ├── orchestrator.py            # Wires connection pool, DDL, routes commands
-│   └── schema_manager.py          # Applies DDL; seeds Unknown member rows
-│
-├── warehouse/
-│   ├── connection.py              # Connection pool helpers
-│   ├── dwh_ddl.sql                # Star schema DDL (dimensions + facts)
-│   ├── audit_ddl.sql              # pipeline_audit schema DDL
-│   ├── analytics_ddl.sql          # 6 OLAP views for dashboard
-│   └── seed.sql                   # -1 Unknown member rows for SCD2 dims
-│
-├── loaders/
-│   ├── base_scd2_loader.py        # Abstract base: change detection, version history
-│   ├── dim_customer_loader.py     # SCD2 + PII masking
-│   ├── dim_driver_loader.py       # SCD2 + PII exclusion
-│   ├── dim_restaurant_loader.py   # SCD2 (is_active) + SCD1 (rating_avg)
-│   ├── dim_agent_loader.py        # SCD2 + PII masking
-│   ├── dim_date_loader.py         # Generates hourly rows for 2020–2030 (~96,000 rows)
-│   ├── dim_static_loader.py       # UPSERT loader for reason/channel/priority
-│   ├── fact_orders_loader.py      # Orders with orphan detection
-│   ├── fact_tickets_loader.py     # Tickets with SLA flag calculation
-│   └── fact_events_loader.py      # Ticket status events
-│
-├── pipelines/
-│   ├── batch_pipeline.py          # Orchestrates daily dimension load
-│   ├── stream_pipeline.py         # Orchestrates hourly fact load
-│   ├── reconciliation_job.py      # Post-batch orphan resolution + backfill trigger
-│   └── watcher.py                 # Continuous polling daemon (--watch mode)
-│
-├── handlers/
-│   ├── orphan_handler.py          # Step 1 — write orphan_tracking rows
-│   ├── backfill_handler.py        # Step 3 — insert fact v2 rows
-│   └── quarantine_handler.py      # Route rejected records to quarantine table
-│
-├── validators/
-│   ├── schema_registry.py         # 38 schema contracts (one per entity)
-│   └── schema_validator.py        # 3-stage validation engine
-│
-├── quality/
-│   ├── metrics_tracker.py         # Writes to pipeline_quality_metrics after each load
-│   └── quality_report.py          # Generates optional PDF quality report
-│
-├── utils/
-│   ├── file_tracker.py            # SHA-256 hashing + dedup check
-│   ├── logger.py                  # Structured JSON logger
-│   ├── PII_handler.py             # Name masking, hashing, two-layer encryption
-│   ├── pii_policy.py              # Field exclusion / retention policy
-│   └── date_utils.py              # Date parsing helpers
-│
-├── alerting/
-│   └── alert_service.py           # Async SMTP alerting on pipeline failures
-│
-├── analytics/
-│   └── dashboard.py               # Streamlit dashboard (reads OLAP views)
-│
-├── data_generators/               # Synthetic Egyptian-locale data generators
-│   ├── generate_master_data.py    # Run once — creates base OLTP master records
-│   ├── generate_batch_data.py     # Creates daily dimension snapshot files
-│   ├── generate_stream_data.py    # Creates hourly transaction files
-│   ├── add_new_customers.py       # Simulates mid-day customer signups
-│   ├── add_new_drivers.py         # Simulates mid-day driver onboarding
-│   └── simulate_day.py            # Runs all 24 stream hours for a full day
-│
-├── tests/
-│   ├── test_schema.py             # 278 schema validation unit tests (no DB needed)
-│   ├── test_loaders.py            # Loader logic unit tests
-│   ├── test_e2e_pipeline.py       # Full integration test
-│   └── test_pipeline_full.py      # Health check — 7 sections, 62 assertions
-│
-└── data/
-    ├── master/                    # OLTP source master CSVs (generated once)
-    ├── input/batch/               # Daily dimension snapshots
-    ├── input/stream/              # Hourly fact files
-    └── quarantine/                # Rejected records (local backup)
+├── alerting/                       # SMTP report and alert delivery
+├── analytics/                      # Analytics client + Streamlit dashboard
+├── config/                         # Pydantic settings and config files
+├── data_generators/                # Master · batch · stream · day simulation scripts
+├── handlers/                       # Backfill · orphan · quarantine handlers
+├── loaders/                        # SCD2 · static dimension · fact loaders
+├── pipelines/                      # Batch · stream · watcher · reconciliation jobs
+├── quality/                        # Metrics tracker + PDF quality report
+├── tests/                          # pytest tests + inspection utilities
+├── utils/                          # Logging · readers · file tracking · retry helpers
+├── validators/                     # Schema registry + validation engine
+├── warehouse/                      # DDL · seed data · analytics views · DB connection
+└── quarantine_exports/             # Exported quarantine artifacts
 ```
+
+### Project Snapshot
+
+| Area | File |
+|---|---|
+| CLI entrypoint | `main.py` |
+| Runtime config | `config/settings.py` (Pydantic) |
+| Warehouse DDL | `warehouse/dwh_ddl.sql` |
+| Audit DDL | `warehouse/audit_ddl.sql` |
+| Analytics DDL | `warehouse/analytics_ddl.sql` |
+| Batch pipeline | `pipelines/batch_pipeline.py` |
+| Stream pipeline | `pipelines/stream_pipeline.py` |
+| Orphan reconciliation | `pipelines/reconciliation_job.py` · `handlers/backfill_handler.py` |
+| Validation contracts | `validators/schema_registry.py` |
+| Quality layer | `quality/metrics_tracker.py` · `quality/quality_report.py` |
+| Dashboard | `analytics/dashboard.py` |
+
+### Reviewer Path
+
+If you are reviewing the engineering design, start with these files:
+
+| Start Here | Why It Matters |
+|---|---|
+| `warehouse/dwh_ddl.sql` | Defines the star schema, SCD2 dimensions, fact grains, and unknown-member strategy |
+| `pipelines/stream_pipeline.py` | Shows hourly fact ingestion, validation, orphan handling, and audit logging |
+| `handlers/backfill_handler.py` | Implements the late-arriving dimension repair flow for versioned orders |
+| `validators/schema_registry.py` | Centralizes source, warehouse, and audit contracts used by validation |
+| `analytics/dashboard.py` | Serves business-facing KPIs from warehouse views |
 
 ---
 
-## Data Generators
+## 🚀 Quick Start
 
-Generators produce realistic Egyptian-locale data with ~5–15% intentionally dirty rows to exercise validation and quarantine logic.
+### Prerequisites
 
-```bash
-# Run once at project start
-python data_generators/generate_master_data.py
+- Python 3.11+
+- Docker Desktop or Docker Engine + Compose
 
-# Generate one day's batch files
-python data_generators/generate_batch_data.py --date 2026-04-10
-
-# Simulate mid-day signups (optional)
-python data_generators/add_new_customers.py --count 5
-python data_generators/add_new_drivers.py --count 3
-
-# Generate one hour of stream data
-python data_generators/generate_stream_data.py --date 2026-04-10 --hour 14
-
-# Generate all 24 hours at once
-python data_generators/simulate_day.py --date 2026-04-10
-```
-
-**Recommended execution order:**
-1. `generate_master_data.py` — once only
-2. `generate_batch_data.py` — each simulated day
-3. `add_new_customers.py` / `add_new_drivers.py` — optional, simulates intra-day arrivals
-4. `generate_stream_data.py` — one or more hours per day
-
----
-
-## Troubleshooting
-
-### Database won't connect
+### 1 — Python Environment
 
 ```bash
-docker-compose ps                  # check container status
-docker-compose up -d postgres      # restart if stopped
+python -m venv .venv
+
+# Windows PowerShell
+.\.venv\Scripts\Activate.ps1
+
+# macOS / Linux
+source .venv/bin/activate
+
+pip install -r requirements.txt
 ```
 
-### FK constraint error on stream load (`customer_key=-1 not found`)
+### 2 — Configure Secrets
 
-The Unknown member seed rows are missing. Run:
+```bash
+cp .env.example .env
+
+# Generate a real PII pepper
+python -c "import secrets; print(secrets.token_hex(32))"
+```
+
+Add the output to `.env`:
+
+```env
+PII_HASH_PEPPER=<generated-value>
+
+# Database defaults (Docker Compose)
+POSTGRES_HOST=localhost
+POSTGRES_PORT=5432
+POSTGRES_DB=fastfeast_db
+POSTGRES_USER=fastfeast
+POSTGRES_PASSWORD=fastfeast_pass
+```
+
+### 3 — Start PostgreSQL
+
+```bash
+docker compose up -d postgres
+
+# Optional pgAdmin at http://localhost:5050
+docker compose --profile tools up -d
+```
+
+### 4 — Initialize the Warehouse
 
 ```bash
 python main.py init-db --with-seed
 ```
 
-### `PII_HASH_PEPPER` missing or invalid
+This applies `audit_ddl.sql`, `dwh_ddl.sql`, `seed.sql`, and generates the hourly date dimension.
 
-Generate a new pepper and add it to `.env`:
-
-```bash
-python -c "import secrets; print(secrets.token_hex(32))"
-```
-
-### Stream file silently skipped (already processed)
-
-The file hash exists in `file_tracker`. Clear stream tracker entries and retry:
+### 5 — Generate Source Data
 
 ```bash
-python reset_stream.py
+python data_generators/generate_master_data.py
+python data_generators/generate_batch_data.py --date 2026-04-10
+python data_generators/generate_stream_data.py --date 2026-04-10 --hour 12
+
+# Or simulate a multi-hour day
+python data_generators/simulate_day.py --date 2026-04-10
 ```
 
-### Orphans never resolve
-
-Check whether the dimension record exists in the warehouse:
+### 6 — Run the Pipelines
 
 ```bash
-python check_orphans.py
+python main.py batch --date 2026-04-10
+python main.py stream --date 2026-04-10 --hour 12
+
+# Continuous watcher mode
+python main.py stream --watch
 ```
 
-If it's still missing, the source record was likely quarantined during batch (dirty data). Once a clean version arrives in a future batch run, the reconciliation job creates the v2 row automatically.
-
-### High quarantine rate
-
-Inspect the reasons directly:
-
-```sql
-SELECT entity_type, error_details, COUNT(*)
-FROM pipeline_audit.quarantine
-GROUP BY entity_type, error_details
-ORDER BY count DESC;
-```
-
-### `reportlab` not installed (PDF quality report)
+### 7 — Launch the Dashboard
 
 ```bash
-pip install reportlab
+python main.py analytics setup
+python main.py analytics dashboard
+# → http://localhost:8501
 ```
 
 ---
 
-## Notes on PII Handling
+## 🖥️ Command Reference
 
-| Field | Treatment |
+| Command | What It Does |
 |---|---|
-| Customer `full_name` | Dropped — not stored in warehouse |
-| Customer `email`, `phone` | SHA-256 hashed (stored as `email_hash`, `phone_hash`) |
-| Agent name | Partial mask — first 3 chars kept, rest replaced with `*` |
-| Agent email / phone | SHA-256 hashed |
-| Driver name | Partial mask — first 3 chars kept, rest replaced with `*` |
-| Driver phone / national ID | SHA-256 hashed |
+| `python main.py init-db` | Applies audit + warehouse DDL, loads date dimension |
+| `python main.py init-db --with-seed` | Also inserts `-1` unknown rows for customer, driver, restaurant |
+| `python main.py batch --date YYYY-MM-DD` | Loads daily dimensions + runs orphan reconciliation |
+| `python main.py stream --date YYYY-MM-DD --hour HH` | Loads one hour of orders, tickets, and events |
+| `python main.py stream --watch` | Runs the continuous file watcher |
+| `python main.py analytics setup` | Creates analytics views |
+| `python main.py analytics dashboard` | Starts Streamlit at localhost:8501 |
 
-The `PII_HASH_PEPPER` secret is used as a cryptographic salt for all hashed fields. Never commit it to version control.
+---
+
+## 🏭 Data Generators
+
+| Script | Purpose |
+|---|---|
+| `generate_master_data.py` | Creates base synthetic source entities |
+| `generate_batch_data.py --date YYYY-MM-DD` | Creates one day of dimension snapshots |
+| `generate_stream_data.py --date YYYY-MM-DD --hour HH` | Creates one hour of stream facts |
+| `simulate_day.py --date YYYY-MM-DD` | Runs a multi-hour day simulation |
+| `add_new_customers.py --count N` | Adds N new customers to master data |
+| `add_new_drivers.py --count N` | Adds N new drivers to master data |
+
+Source files are generated locally so the same project can be rerun with fresh operational scenarios, including new parent entities that arrive after stream facts have already been loaded.
+
+---
+
+## 📈 Dashboard
+
+The Streamlit dashboard focuses on support operations and revenue impact — all backed by warehouse views, not application-level queries.
+
+**KPI Cards:** Total tickets · SLA first-response breach rate · SLA resolution breach rate · Avg first response time · Avg resolution time · Reopen rate · Total refund amount · Net revenue and refund impact
+
+**Breakdown Views:** Tickets by location · Tickets by restaurant · Tickets by driver · Recent ticket details
+
+---
+
+## 🧪 Testing
+
+```bash
+# Run all pytest-discoverable tests
+pytest
+
+# Focused integration tests
+pytest tests/test_orphan_resolution_flow.py
+pytest tests/test_quality_report_email_integration.py
+
+# Executable inspection scripts
+python tests/test_alert.py
+python tests/test_file_tracker.py
+python tests/test_orphan.py
+python tests/test_watcher.py
+python tests/inspect_audit_schema.py
+```
+
+> Database-backed tests require a running PostgreSQL instance and a valid `.env` file.
+
+---
+
+## ⚙️ Full Configuration Reference
+
+```env
+# Required
+PII_HASH_PEPPER=<secret>
+
+# Database
+POSTGRES_HOST=localhost
+POSTGRES_PORT=5432
+POSTGRES_DB=fastfeast_db
+POSTGRES_USER=fastfeast
+POSTGRES_PASSWORD=fastfeast_pass
+
+# File paths
+BATCH_INPUT_DIR=data/input/batch
+STREAM_INPUT_DIR=data/input/stream
+QUARANTINE_DIR=data/quarantine
+PROCESSED_DIR=data/processed
+LOG_DIR=logs
+
+# Alerting (optional)
+ALERTING_ENABLED=true
+SMTP_HOST=smtp.gmail.com
+SMTP_PORT=587
+SMTP_USER=
+SMTP_PASSWORD=
+ALERT_RECIPIENTS=
+REPORT_RECIPIENTS=
+```
+
+> ⚠️ **Never commit `.env` or your `PII_HASH_PEPPER` to version control.**
+
+---
+
+## 🩺 Troubleshooting
+
+<details>
+<summary><strong>PostgreSQL is not reachable</strong></summary>
+
+```bash
+docker compose ps
+docker compose up -d postgres
+```
+</details>
+
+<details>
+<summary><strong>`PII_HASH_PEPPER` is missing or invalid</strong></summary>
+
+```bash
+python -c "import secrets; print(secrets.token_hex(32))"
+```
+</details>
+
+<details>
+<summary><strong>Stream facts fail due to missing `-1` keys</strong></summary>
+
+```bash
+python main.py init-db --with-seed
+```
+</details>
+
+<details>
+<summary><strong>Files are silently skipped on rerun</strong></summary>
+
+This is expected behavior. The pipeline records every processed file in `pipeline_audit.file_tracker` using SHA-256 hashes. Re-running the same file is idempotent by design.
+</details>
+
+<details>
+<summary><strong>Orphans remain unresolved after multiple batch runs</strong></summary>
+
+The missing parent entity may have been absent or quarantined during batch. The orphan stays open until a valid batch record arrives or the retry limit sends it to permanent quarantine.
+</details>
+
+<details>
+<summary><strong>Quarantine volume is unexpectedly high</strong></summary>
+
+```sql
+SELECT entity_type, error_type, error_details, COUNT(*)
+FROM pipeline_audit.quarantine
+GROUP BY entity_type, error_type, error_details
+ORDER BY COUNT(*) DESC;
+```
+</details>
+
+---
+
+## 🔬 Technical Highlights
+
+- **End-to-end CLI** for warehouse initialization, batch loading, stream loading, file watcher mode, and analytics setup
+- **PostgreSQL warehouse** with fully separated dimension, fact, audit, and analytics layers
+- **SCD Type 2** dimension loading for customers, drivers, restaurants, and agents — history is preserved, never overwritten
+- **Versioned fact repair** for late-arriving dimensions — original rows are kept; corrections are inserted as new versions
+- **Dedicated audit schema** — run logs, file tracking, quality metrics, orphan tracking, and quarantine in one queryable place
+- **38 validation contracts** covering source, warehouse, and audit entities with column-level rules
+- **Idempotent pipeline design** — SHA-256 file hashing prevents duplicate processing at the loader level
+- **Synthetic data generators** for fully reproducible local demonstrations with no external dependencies
+- **Streamlit dashboard** backed by warehouse OLAP views — no ad hoc application-side aggregation
+
+---
+
+<div align="center">
+
+<br/>
+
+```
++---------------------------------------------------------------+
+| FastFeast doesn't pretend operational data is clean.           |
+| It builds the machinery to make it trustworthy.                |
++---------------------------------------------------------------+
+```
+
+Built with **Python** · **PostgreSQL** · **Docker** · **Pydantic** · **pytest** · **Streamlit**
+
+<br/>
+
+*If this project helped you, a ⭐ goes a long way.*
+
+</div>

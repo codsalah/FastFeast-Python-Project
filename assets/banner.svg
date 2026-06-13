@@ -1,0 +1,53 @@
+<svg width="680" height="220" viewBox="0 0 680 220" role="img" xmlns="http://www.w3.org/2000/svg">
+  <title>FastFeast Data Platform</title>
+  <desc>FastFeast — data platform banner</desc>
+
+  <rect width="680" height="220" fill="#080c12"/>
+
+  <line x1="0" y1="0" x2="680" y2="220" stroke="#0e1520" stroke-width="1.5"/>
+  <line x1="0" y1="44" x2="680" y2="264" stroke="#0e1520" stroke-width="1.5"/>
+  <line x1="0" y1="88" x2="680" y2="308" stroke="#0e1520" stroke-width="1.5"/>
+  <line x1="0" y1="132" x2="680" y2="352" stroke="#0e1520" stroke-width="1.5"/>
+  <line x1="0" y1="176" x2="680" y2="396" stroke="#0e1520" stroke-width="1.5"/>
+  <line x1="0" y1="-44" x2="680" y2="176" stroke="#0e1520" stroke-width="1.5"/>
+  <line x1="0" y1="-88" x2="680" y2="132" stroke="#0e1520" stroke-width="1.5"/>
+  <line x1="0" y1="-132" x2="680" y2="88" stroke="#0e1520" stroke-width="1.5"/>
+  <line x1="0" y1="-176" x2="680" y2="44" stroke="#0e1520" stroke-width="1.5"/>
+
+  <rect x="0" y="0" width="680" height="4" fill="#60a5fa"/>
+  <rect x="0" y="216" width="680" height="4" fill="#60a5fa"/>
+  <rect x="0" y="0" width="4" height="220" fill="#60a5fa"/>
+  <rect x="676" y="0" width="4" height="220" fill="#60a5fa"/>
+
+  <rect x="4" y="4" width="672" height="212" fill="none" stroke="#1a2f4a" stroke-width="1"/>
+
+  <circle cx="4" cy="4" r="4" fill="#080c12" stroke="#60a5fa" stroke-width="1.5"/>
+  <circle cx="676" cy="4" r="4" fill="#080c12" stroke="#60a5fa" stroke-width="1.5"/>
+  <circle cx="4" cy="216" r="4" fill="#080c12" stroke="#60a5fa" stroke-width="1.5"/>
+  <circle cx="676" cy="216" r="4" fill="#080c12" stroke="#60a5fa" stroke-width="1.5"/>
+
+  <text x="340" y="118"
+        text-anchor="middle"
+        font-family="'Courier New', Courier, monospace"
+        font-size="74" font-weight="700"
+        letter-spacing="14"
+        fill="#e8f0fe">FASTFEAST</text>
+
+  <text x="340" y="150"
+        text-anchor="middle"
+        font-family="'Courier New', Courier, monospace"
+        font-size="12"
+        letter-spacing="8"
+        fill="#60a5fa">DATA  PLATFORM</text>
+
+  <line x1="240" y1="166" x2="440" y2="166" stroke="#1a2f4a" stroke-width="1"/>
+  <circle cx="240" cy="166" r="2" fill="#60a5fa"/>
+  <circle cx="440" cy="166" r="2" fill="#60a5fa"/>
+
+  <text x="340" y="186"
+        text-anchor="middle"
+        font-family="'Courier New', Courier, monospace"
+        font-size="10"
+        letter-spacing="3"
+        fill="#253858">BATCH · STREAM · SCD2 · ORPHAN BACKFILL · AUDIT · OLAP</text>
+</svg>
